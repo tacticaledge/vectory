@@ -1,0 +1,9 @@
+include app.py
+include requirements.txt
+recursive-include .streamlit *.toml
+recursive-include pages *.py
+recursive-include components *.py
+recursive-include data *.json *.jsonl *.csv
+recursive-include docs *.md
+recursive-include scripts *.py
+recursive-include tests *.py *.json *.csv

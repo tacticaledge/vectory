@@ -1,0 +1,204 @@
+[
+  {
+    "agent": "PolicyProofAgent",
+    "model": "example-model",
+    "task_id": "proof_grounding.policy_guardrail.001",
+    "run_id": "proof_grounding.policy_guardrail.001.run_0",
+    "status": "completed",
+    "declared_success": true,
+    "final_answer": "The synthetic policy proof result is VALID for the translated tuition reimbursement claim. supportingRules policy-rule.reimbursement.full_time and policy-rule.reimbursement.tenure prove the claim, source-reference hr-guide#tuition-2026 is attached, and NO_TRANSLATIONS remains for a side claim outside the policy variables.",
+    "claims": [
+      {
+        "claim_id": "claim.policy.valid",
+        "text": "The translated tuition reimbursement answer is VALID under the synthetic policy.",
+        "evidence_ids": [
+          "evidence.policy.check"
+        ],
+        "obligation_ids": [
+          "obligation.policy_translation",
+          "obligation.supporting_rules"
+        ],
+        "confidence": 0.96
+      },
+      {
+        "claim_id": "claim.source.reference",
+        "text": "The result includes source-reference hr-guide#tuition-2026.",
+        "evidence_ids": [
+          "evidence.source.reference"
+        ],
+        "obligation_ids": [
+          "obligation.supporting_rules"
+        ],
+        "confidence": 0.93
+      },
+      {
+        "claim_id": "claim.no_translations.warning",
+        "text": "NO_TRANSLATIONS is preserved as a warning for content outside the policy variables.",
+        "evidence_ids": [
+          "evidence.no_translations"
+        ],
+        "obligation_ids": [
+          "obligation.untranslated_claims"
+        ],
+        "confidence": 0.91
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "evidence.policy.check",
+        "source_type": "policy_checker_output",
+        "artifact_path": "artifacts/policy-proof-check.json",
+        "output_span": "VALID; supportingRules=[policy-rule.reimbursement.full_time, policy-rule.reimbursement.tenure]",
+        "relevance": 0.98,
+        "supports_claim_ids": [
+          "claim.policy.valid"
+        ]
+      },
+      {
+        "evidence_id": "evidence.source.reference",
+        "source_type": "source_document_reference",
+        "artifact_path": "artifacts/hr-guide-source-reference.json",
+        "output_span": "source-reference hr-guide#tuition-2026",
+        "relevance": 0.94,
+        "supports_claim_ids": [
+          "claim.source.reference"
+        ]
+      },
+      {
+        "evidence_id": "evidence.no_translations",
+        "source_type": "policy_checker_output",
+        "artifact_path": "artifacts/policy-proof-check.json",
+        "output_span": "NO_TRANSLATIONS for side claim: manager discretion note not represented in policy variables",
+        "relevance": 0.9,
+        "supports_claim_ids": [
+          "claim.no_translations.warning"
+        ]
+      }
+    ],
+    "proof_obligations": [
+      {
+        "obligation_id": "obligation.policy_translation",
+        "description": "Translated premises and claim use the synthetic policy variables for employment status, tenure days, and program eligibility.",
+        "checker_type": "policy",
+        "status": "closed",
+        "claim_ids": [
+          "claim.policy.valid"
+        ]
+      },
+      {
+        "obligation_id": "obligation.supporting_rules",
+        "description": "VALID result must cite supportingRules and source-reference evidence from the policy document.",
+        "checker_type": "policy",
+        "status": "closed",
+        "depends_on": [
+          "obligation.policy_translation"
+        ],
+        "claim_ids": [
+          "claim.policy.valid",
+          "claim.source.reference"
+        ]
+      },
+      {
+        "obligation_id": "obligation.untranslated_claims",
+        "description": "Untranslated content must remain visible as NO_TRANSLATIONS and cannot be counted as formally validated.",
+        "checker_type": "formal",
+        "status": "closed",
+        "claim_ids": [
+          "claim.no_translations.warning"
+        ]
+      }
+    ],
+    "checker_results": [
+      {
+        "checker_id": "checker.policy.proof",
+        "name": "policy-proof-check",
+        "checker_type": "policy",
+        "status": "passed",
+        "obligation_ids": [
+          "obligation.policy_translation",
+          "obligation.supporting_rules"
+        ],
+        "output_summary": "VALID with supportingRules policy-rule.reimbursement.full_time and policy-rule.reimbursement.tenure; source-reference hr-guide#tuition-2026"
+      },
+      {
+        "checker_id": "checker.formal.no_translations",
+        "name": "no-translations-warning-preserved",
+        "checker_type": "formal",
+        "status": "passed",
+        "obligation_ids": [
+          "obligation.untranslated_claims"
+        ],
+        "output_summary": "NO_TRANSLATIONS warning is retained and is not treated as a proved policy claim"
+      }
+    ],
+    "events": [
+      {
+        "type": "evidence",
+        "name": "policy-rule-source",
+        "content": "policy-rule.reimbursement.full_time and policy-rule.reimbursement.tenure loaded with source-reference hr-guide#tuition-2026",
+        "success": true
+      },
+      {
+        "type": "claim",
+        "name": "translated-claim",
+        "content": "The tuition reimbursement answer is VALID for the translated policy variables.",
+        "success": true
+      },
+      {
+        "type": "proof_obligation",
+        "name": "obligation.policy_translation",
+        "content": "Policy translation obligation registered and closed.",
+        "success": true
+      },
+      {
+        "type": "proof_obligation",
+        "name": "obligation.supporting_rules",
+        "content": "supportingRules obligation registered and closed with source-reference evidence.",
+        "success": true
+      },
+      {
+        "type": "proof_obligation",
+        "name": "obligation.untranslated_claims",
+        "content": "NO_TRANSLATIONS obligation registered and closed as a warning.",
+        "success": true
+      },
+      {
+        "type": "checker_result",
+        "name": "policy-proof-check",
+        "content": "VALID with supportingRules and source-reference.",
+        "success": true
+      },
+      {
+        "type": "policy_check",
+        "name": "policy-proof-check-result",
+        "content": "Policy checker passed for translated claims; NO_TRANSLATIONS warning retained for side claim.",
+        "success": true
+      },
+      {
+        "type": "verification",
+        "name": "proof-grounding-review",
+        "content": "Confirmed every final claim links to evidence, closed obligations, and passing checker output.",
+        "success": true
+      },
+      {
+        "type": "checkpoint",
+        "name": "proof-grounding-checkpoint",
+        "content": "All required proof obligations are closed and checker results pass.",
+        "output": {
+          "wall_time_seconds": 420,
+          "score": 0.98,
+          "open_obligations": 0,
+          "failed_checkers": 0
+        },
+        "success": true
+      },
+      {
+        "type": "final",
+        "content": "VALID policy answer returned with supportingRules, source-reference, and NO_TRANSLATIONS warning."
+      }
+    ],
+    "metrics": {
+      "tokens": 11200
+    }
+  }
+]

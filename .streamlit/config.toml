@@ -1,0 +1,22 @@
+[theme]
+# Vectory - Precision LLM Evaluation
+# Developer-centric dark theme
+primaryColor = "#6366f1"
+backgroundColor = "#0f172a"
+secondaryBackgroundColor = "#1e293b"
+textColor = "#f1f5f9"
+font = "sans serif"
+
+[server]
+# Server configuration
+headless = true
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+# Browser settings
+gatherUsageStats = false
+
+[runner]
+# Runner settings
+fastReruns = true

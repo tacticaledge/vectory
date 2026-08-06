@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vectoryai"
+version = "1.0.0"
+description = "Open-source LLM and agent evaluation toolkit with custom benchmarks and proof-grounded trace scoring."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Tactical Edge" }]
+keywords = ["llm", "agents", "evaluation", "benchmark", "rag", "streamlit"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "streamlit>=1.28.0",
+    "pandas>=2.0.0",
+    "pydantic>=2.0.0",
+    "requests>=2.32.4",
+    "plotly>=5.18.0",
+    "streamlit-lottie>=0.0.5",
+    "matplotlib>=3.7.0",
+    "pymupdf4llm>=0.0.17",
+    "pymupdf>=1.24.0",
+    "Pillow>=10.4.0",
+    "evaluate>=0.4.1",
+    "rouge-score>=0.1.2",
+    "nltk>=3.9.0",
+    "python-Levenshtein>=0.25.0",
+    "openai>=1.40.0",
+    "anthropic>=0.34.0",
+    "scipy>=1.13.0",
+    "numpy>=1.26.0",
+]
+
+[project.optional-dependencies]
+embedding = [
+    "torch>=2.1.0",
+    "mteb>=1.0.0",
+    "sentence-transformers>=2.2.0",
+]
+formal = [
+    "z3-solver>=4.13.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "build>=1.0.0",
+    "twine>=5.0.0",
+]
+
+[project.urls]
+Homepage = "https://vectoryai.com"
+Application = "https://app.vectoryai.com"
+Repository = "https://github.com/tacticaledge/vectory"
+
+[project.scripts]
+vectory = "vectory_cli.cli:main"
+
+[tool.setuptools]
+packages = [
+    "components",
+    "components.evaluators",
+    "components.vectory_benchmark",
+    "vectory_cli",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

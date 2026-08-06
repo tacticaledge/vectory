@@ -1,0 +1,140 @@
+[
+  {
+    "agent": "GroundedAgent",
+    "model": "example-model",
+    "task_id": "coding.inspect_before_edit.001",
+    "run_id": "coding.inspect_before_edit.001.run_0",
+    "status": "completed",
+    "final_answer": "Inspected the parser test, implemented the fix in src/parser.py, and verified the test.",
+    "declared_success": true,
+    "events": [
+      {
+        "type": "tool_call",
+        "name": "read_file",
+        "path": "tests/test_parser.py",
+        "success": true
+      },
+      {
+        "type": "tool_call",
+        "name": "rg",
+        "input": {
+          "pattern": "parse"
+        },
+        "success": true
+      },
+      {
+        "type": "file_edit",
+        "path": "src/parser.py",
+        "success": true
+      },
+      {
+        "type": "verification",
+        "name": "pytest",
+        "content": "Ran the parser test successfully.",
+        "success": true
+      },
+      {
+        "type": "final",
+        "content": "Completed with verification."
+      }
+    ],
+    "metrics": {
+      "tokens": 8200,
+      "wall_time_seconds": 95
+    }
+  },
+  {
+    "agent": "ThrashAgent",
+    "model": "example-model",
+    "task_id": "research.search_converges.001",
+    "run_id": "research.search_converges.001.run_0",
+    "status": "completed",
+    "final_answer": "The answer uses a source, but the trace did not converge cleanly.",
+    "events": [
+      {
+        "type": "message",
+        "content": "I will plan the approach first before checking sources."
+      },
+      {
+        "type": "tool_call",
+        "name": "search",
+        "input": {
+          "query": "same source query"
+        },
+        "success": true
+      },
+      {
+        "type": "tool_call",
+        "name": "search",
+        "input": {
+          "query": "same source query"
+        },
+        "success": true
+      },
+      {
+        "type": "tool_call",
+        "name": "search",
+        "input": {
+          "query": "same source query"
+        },
+        "success": true
+      },
+      {
+        "type": "tool_call",
+        "name": "search",
+        "input": {
+          "query": "same source query"
+        },
+        "success": true
+      },
+      {
+        "type": "tool_call",
+        "name": "search",
+        "input": {
+          "query": "same source query"
+        },
+        "success": true
+      },
+      {
+        "type": "tool_call",
+        "name": "search",
+        "input": {
+          "query": "same source query"
+        },
+        "success": true
+      },
+      {
+        "type": "tool_call",
+        "name": "search",
+        "input": {
+          "query": "same source query"
+        },
+        "success": true
+      },
+      {
+        "type": "tool_call",
+        "name": "search",
+        "input": {
+          "query": "same source query"
+        },
+        "success": true
+      },
+      {
+        "type": "tool_call",
+        "name": "search",
+        "input": {
+          "query": "same source query"
+        },
+        "success": true
+      },
+      {
+        "type": "final",
+        "content": "Finished."
+      }
+    ],
+    "metrics": {
+      "tokens": 19500,
+      "wall_time_seconds": 220
+    }
+  }
+]

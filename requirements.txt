@@ -1,0 +1,64 @@
+# =============================================================================
+# Vectory - Precision LLM Evaluation - Dependencies
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Core Framework
+# -----------------------------------------------------------------------------
+streamlit>=1.28.0
+pandas>=2.0.0
+pydantic>=2.0.0
+requests>=2.32.4            # Fixed CVE-2024-47081 (credential leak)
+
+# -----------------------------------------------------------------------------
+# Visualization
+# -----------------------------------------------------------------------------
+plotly>=5.18.0
+streamlit-lottie>=0.0.5
+matplotlib>=3.7.0              # Required for pandas Styler background_gradient
+
+# -----------------------------------------------------------------------------
+# Document Processing
+# -----------------------------------------------------------------------------
+pymupdf4llm>=0.0.17         # PDF to Markdown (optimized for LLM workflows)
+pymupdf>=1.24.0             # PyMuPDF (fitz) - PDF parsing engine
+Pillow>=10.4.0              # Fixed CVE-2023-50447, CVE-2023-5129
+
+# -----------------------------------------------------------------------------
+# LLM Evaluation Metrics
+# -----------------------------------------------------------------------------
+evaluate>=0.4.1             # HuggingFace evaluate library
+rouge-score>=0.1.2          # ROUGE metrics
+nltk>=3.9.0                 # Natural Language Toolkit
+python-Levenshtein>=0.25.0  # Fast Levenshtein distance
+
+# -----------------------------------------------------------------------------
+# LLM API Clients
+# -----------------------------------------------------------------------------
+openai>=1.40.0              # OpenAI API (GPT-4, etc.)
+anthropic>=0.34.0           # Anthropic API
+
+# -----------------------------------------------------------------------------
+# Scientific Computing
+# -----------------------------------------------------------------------------
+scipy>=1.13.0
+numpy>=1.26.0               # Security fixes, pre-2.0 EOL Sept 2025
+
+# -----------------------------------------------------------------------------
+# MTEB Embedding Evaluation (Optional - requires PyTorch >= 2.1.0)
+# -----------------------------------------------------------------------------
+# NOTE: These packages require PyTorch >= 2.1.0
+# If you don't need embedding evaluation, you can comment these out.
+# The app will work without them (with reduced functionality).
+#
+# For source checkouts, use: pip install -e ".[embedding]"
+# For requirements-only installs, install these optional packages separately:
+#
+# mteb>=1.0.0
+# sentence-transformers>=2.2.0
+
+# -----------------------------------------------------------------------------
+# Testing (install with: pip install pytest pytest-cov)
+# -----------------------------------------------------------------------------
+# pytest>=7.0.0
+# pytest-cov>=4.0.0

@@ -1,0 +1,52 @@
+[
+  {
+    "input": "What is the capital of France?",
+    "expected": "Paris",
+    "output": "The capital of France is Paris. It is the largest city in France and serves as the country's political, economic, and cultural center."
+  },
+  {
+    "input": "Explain photosynthesis in simple terms.",
+    "expected": "Photosynthesis is the process by which plants convert sunlight, water, and carbon dioxide into glucose and oxygen.",
+    "output": "Photosynthesis is how plants make their food. They use sunlight, water from the soil, and carbon dioxide from the air to create sugar (glucose) for energy. As a bonus, they release oxygen into the air, which we breathe!"
+  },
+  {
+    "input": "What is 15 + 27?",
+    "expected": "42",
+    "output": "15 + 27 = 42"
+  },
+  {
+    "input": "Who wrote Romeo and Juliet?",
+    "expected": "William Shakespeare",
+    "output": "Romeo and Juliet was written by William Shakespeare, the famous English playwright and poet from the Elizabethan era."
+  },
+  {
+    "input": "What is the chemical symbol for water?",
+    "expected": "H2O",
+    "output": "The chemical symbol for water is H2O, which represents two hydrogen atoms bonded to one oxygen atom."
+  },
+  {
+    "input": "Name three primary colors.",
+    "expected": "Red, blue, and yellow",
+    "output": "The three primary colors are red, blue, and yellow. These colors cannot be created by mixing other colors and are the basis for creating all other colors."
+  },
+  {
+    "input": "What year did World War II end?",
+    "expected": "1945",
+    "output": "World War II ended in 1945. The war in Europe ended on May 8, 1945 (V-E Day), and the war in the Pacific ended on September 2, 1945 (V-J Day) after Japan's surrender."
+  },
+  {
+    "input": "What is the speed of light?",
+    "expected": "Approximately 299,792 kilometers per second",
+    "output": "The speed of light in a vacuum is approximately 299,792 kilometers per second (or about 186,282 miles per second). This is often rounded to 300,000 km/s for calculations."
+  },
+  {
+    "input": "Define 'algorithm' in computing.",
+    "expected": "An algorithm is a step-by-step procedure for solving a problem or accomplishing a task.",
+    "output": "In computing, an algorithm is a finite sequence of well-defined instructions used to solve a specific problem or perform a computation. It's essentially a recipe that tells the computer exactly what steps to take to achieve a desired outcome."
+  },
+  {
+    "input": "What is the largest planet in our solar system?",
+    "expected": "Jupiter",
+    "output": "Jupiter is the largest planet in our solar system. It's so big that all other planets could fit inside it. Jupiter is a gas giant with a diameter of about 139,820 kilometers."
+  }
+]

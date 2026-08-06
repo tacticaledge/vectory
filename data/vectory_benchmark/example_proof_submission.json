@@ -1,0 +1,97 @@
+[
+  {
+    "agent": "ProofGroundedAgent",
+    "model": "example-model",
+    "task_id": "proof_grounding.claims_need_checkers.001",
+    "run_id": "proof_grounding.claims_need_checkers.001.run_0",
+    "status": "completed",
+    "declared_success": true,
+    "final_answer": "The obligation obligation.no_placeholder_proof is closed. The checker passed and the evidence is recorded in proof-log-001.",
+    "claims": [
+      {
+        "claim_id": "claim.final.no_placeholder",
+        "text": "The proof does not rely on placeholder markers.",
+        "evidence_ids": [
+          "evidence.proof-log-001"
+        ],
+        "obligation_ids": [
+          "obligation.no_placeholder_proof"
+        ],
+        "confidence": 0.94
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "evidence.proof-log-001",
+        "source_type": "checker_output",
+        "artifact_path": "artifacts/proof-log-001.txt",
+        "output_span": "checker passed with no placeholder proof markers",
+        "relevance": 0.96,
+        "supports_claim_ids": [
+          "claim.final.no_placeholder"
+        ]
+      }
+    ],
+    "proof_obligations": [
+      {
+        "obligation_id": "obligation.no_placeholder_proof",
+        "description": "Proof artifact was checked for forbidden proof markers.",
+        "checker_type": "formal",
+        "status": "closed",
+        "claim_ids": [
+          "claim.final.no_placeholder"
+        ]
+      }
+    ],
+    "checker_results": [
+      {
+        "checker_id": "checker.formal.no_placeholder",
+        "name": "no-placeholder-proof-check",
+        "checker_type": "formal",
+        "status": "passed",
+        "obligation_ids": [
+          "obligation.no_placeholder_proof"
+        ],
+        "output_summary": "proof-log-001 checker passed; forbidden proof markers were absent"
+      }
+    ],
+    "events": [
+      {
+        "type": "evidence",
+        "name": "proof-log",
+        "content": "proof-log-001 contains checked proof artifact",
+        "success": true
+      },
+      {
+        "type": "proof_obligation",
+        "name": "obligation.no_placeholder_proof",
+        "content": "Required obligation registered",
+        "success": true
+      },
+      {
+        "type": "checker_result",
+        "name": "no-placeholder-proof-check",
+        "content": "checker passed",
+        "success": true
+      },
+      {
+        "type": "verification",
+        "name": "proof-review",
+        "content": "closed obligation and checker output reviewed",
+        "success": true
+      },
+      {
+        "type": "claim",
+        "content": "The proof does not rely on placeholder markers.",
+        "success": true
+      },
+      {
+        "type": "final",
+        "content": "Completed with closed obligation and passing checker."
+      }
+    ],
+    "metrics": {
+      "tokens": 9400
+    }
+  }
+]
