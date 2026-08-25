@@ -63,26 +63,23 @@ def test_openai_binary_call_enforces_json_schema():
     evaluator = make_evaluator()
     evaluator.model = "gpt-5-mini"
 
-    class Completions:
+    class FakeBot:
         def __init__(self):
             self.kwargs = None
 
-        def create(self, **kwargs):
+        def complete(self, messages, **kwargs):
             self.kwargs = kwargs
-            message = type("Message", (), {"content": '{"critique":"Fine.","result":"Pass"}'})
-            choice = type("Choice", (), {"message": message})
-            return type("Response", (), {"choices": [choice]})
+            self.messages = messages
+            return '{"critique":"Fine.","result":"Pass"}'
 
-    completions = Completions()
-    evaluator.client = type(
-        "Client", (), {"chat": type("Chat", (), {"completions": completions})()}
-    )()
+    bot = FakeBot()
+    evaluator.client = bot
 
     evaluator._call_openai("Judge this")
 
-    response_format = completions.kwargs["response_format"]
-    assert response_format["type"] == "json_schema"
-    assert response_format["json_schema"]["strict"] is True
+    response_schema = bot.kwargs["response_schema"]
+    assert response_schema["additionalProperties"] is False
+    assert response_schema["properties"]["result"]["enum"] == ["Pass", "Fail"]
 
 
 def test_scale_parser_remains_available_for_legacy_workflows():
@@ -106,4 +103,6 @@ def test_custom_prompt_preserves_json_examples_while_replacing_known_placeholder
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__]))
+    from tests.utils import pytest_this_file
+
+    raise SystemExit(pytest_this_file(__file__))

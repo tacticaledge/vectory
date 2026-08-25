@@ -5,7 +5,6 @@ import hashlib
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import os
 import sys
 from pathlib import Path
 
@@ -15,12 +14,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 def get_api_key(provider: str) -> str:
     """Get API key from session state or environment. Returns empty string if not found."""
     # Map provider to session state key and env var name
-    key_map = {
-        "openai": ("openai_api_key", "OPENAI_API_KEY"),
-        "anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY"),
-    }
+    key_map = {"openai": "openai_api_key", "anthropic": "anthropic_api_key"}
 
-    session_key, env_key = key_map.get(provider, (None, None))
+    session_key = key_map.get(provider)
     if not session_key:
         return ""
 
@@ -28,17 +24,13 @@ def get_api_key(provider: str) -> str:
     if session_key in st.session_state and st.session_state[session_key]:
         return st.session_state[session_key]
 
-    # Check environment variables
-    env_value = os.environ.get(env_key, "")
-    if env_value:
-        return env_value
-
-    return ""
+    return get_provider_api_key(provider)
 
 from components.models import init_session_state, ColumnMapping, DataSourceType
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_ids, get_model_label
 from components.evaluators.llm_judge import LLMJudgeEvaluator, estimate_cost, CRITERIA_TEMPLATES
 from components.eval_workflow import validate_evaluator_definition
+from components.provider_config import get_provider_api_key
 from components.ui import (
     inject_custom_css,
     animated_metric,

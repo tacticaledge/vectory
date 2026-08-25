@@ -419,10 +419,22 @@ def run_validate_judge(args: argparse.Namespace) -> int:
             json.loads(args.evaluator.read_text(encoding="utf-8"))
         )
         lifecycle = dict(evaluator.get("lifecycle_checkpoints") or {})
-        if not lifecycle.get("obvious_errors_reviewed", False):
+        checkpoint_labels = {
+            "human_review_completed": "human review is incomplete",
+            "obvious_errors_reviewed": "obvious product errors were not reviewed",
+            "expert_examples_include_pass_and_fail": (
+                "expert examples do not include both Pass and Fail critiques"
+            ),
+        }
+        incomplete_checkpoints = [
+            message
+            for checkpoint, message in checkpoint_labels.items()
+            if lifecycle.get(checkpoint) is not True
+        ]
+        if incomplete_checkpoints:
             gate_passed = False
             report["gate_passed"] = False
-            report["gate_blockers"] = ["obvious_errors_reviewed checkpoint is incomplete"]
+            report["gate_blockers"] = incomplete_checkpoints
         evaluator["status"] = "validated" if gate_passed else "validation_failed"
         validation_history = list((evaluator.get("validation") or {}).get("history") or [])
         validation_history.append(report)

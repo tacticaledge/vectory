@@ -7,6 +7,7 @@ if __name__ == "__main__":
 
 import pytest
 
+from components.eval_workflow import build_evaluator_definition
 from vectory_cli.cli import main
 
 
@@ -208,5 +209,62 @@ def test_validate_judge_requires_verified_split_manifest(tmp_path):
         )
 
 
+def test_validate_judge_requires_all_human_lifecycle_checkpoints(tmp_path):
+    labels = tmp_path / "labels.jsonl"
+    write_jsonl(
+        labels,
+        [
+            {"id": index, "human": label, "judge": label}
+            for label in ("Pass", "Fail")
+            for index in range(4)
+        ],
+    )
+    split_dir = tmp_path / "splits"
+    assert main(
+        ["split-labels", str(labels), "--label-column", "human", "--out", str(split_dir)]
+    ) == 0
+    evaluator_path = tmp_path / "evaluator.json"
+    evaluator_path.write_text(
+        json.dumps(
+            build_evaluator_definition(
+                "Unsupported claim",
+                {"description": "The output contains an unsupported claim."},
+                errors_reviewed=True,
+            )
+        ),
+        encoding="utf-8",
+    )
+    report_path = tmp_path / "report.json"
+
+    assert main(
+        [
+            "validate-judge",
+            str(split_dir / "test.jsonl"),
+            "--human-column",
+            "human",
+            "--judge-column",
+            "judge",
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
+            "--evaluator",
+            str(evaluator_path),
+            "--out",
+            str(report_path),
+            "--bootstrap-iterations",
+            "50",
+        ]
+    ) == 1
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    evaluator = json.loads(evaluator_path.read_text(encoding="utf-8"))
+    assert report["gate_blockers"] == [
+        "human review is incomplete",
+        "expert examples do not include both Pass and Fail critiques",
+    ]
+    assert evaluator["status"] == "validation_failed"
+    assert evaluator["validation"]["validated"] is False
+
+
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__]))
+    from tests.utils import pytest_this_file
+
+    raise SystemExit(pytest_this_file(__file__))

@@ -9,7 +9,6 @@ import streamlit as st
 import pandas as pd
 import hashlib
 import json
-import os
 from datetime import datetime
 import sys
 from pathlib import Path
@@ -20,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from components.models import init_session_state, ColumnMapping, DataSourceType
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_ids, get_model_label
 from components.error_discovery import generate_taxonomy_suggestions
+from components.provider_config import get_provider_api_key
 from components.eval_workflow import (
     build_evaluator_definition,
     build_review_bundle,
@@ -41,16 +41,13 @@ from components.ui import (
 
 def get_api_key(provider: str) -> str:
     """Get provider API key from session state or environment."""
-    key_map = {
-        "openai": ("openai_api_key", "OPENAI_API_KEY"),
-        "anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY"),
-    }
-    session_key, env_key = key_map.get(provider, (None, None))
+    key_map = {"openai": "openai_api_key", "anthropic": "anthropic_api_key"}
+    session_key = key_map.get(provider)
     if not session_key:
         return ""
     if st.session_state.get(session_key):
         return st.session_state[session_key]
-    return os.environ.get(env_key, "")
+    return get_provider_api_key(provider)
 
 st.set_page_config(
     page_title="Error Analysis | Vectory",

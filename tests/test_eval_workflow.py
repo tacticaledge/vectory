@@ -291,4 +291,6 @@ def test_trace_normalization_preserves_order_and_details():
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__]))
+    from tests.utils import pytest_this_file
+
+    raise SystemExit(pytest_this_file(__file__))

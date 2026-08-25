@@ -56,8 +56,16 @@ def validate_evaluator_definition(
             raise ValueError(f"Evaluator decision requires a non-empty {field}")
     if not isinstance(evaluator.get("validation"), Mapping):
         raise ValueError("Evaluator definition requires validation metadata")
-    if not isinstance(evaluator.get("lifecycle_checkpoints"), Mapping):
+    lifecycle = evaluator.get("lifecycle_checkpoints")
+    if not isinstance(lifecycle, Mapping):
         raise ValueError("Evaluator definition requires lifecycle checkpoints")
+    for checkpoint in (
+        "human_review_completed",
+        "obvious_errors_reviewed",
+        "expert_examples_include_pass_and_fail",
+    ):
+        if not isinstance(lifecycle.get(checkpoint), bool):
+            raise ValueError(f"Evaluator lifecycle checkpoint {checkpoint} must be boolean")
 
     examples = evaluator.get("expert_examples")
     if not isinstance(examples, list):

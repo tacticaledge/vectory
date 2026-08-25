@@ -2,19 +2,11 @@ import re
 import time
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from .base import BaseEvaluator
+from components.agentic import Bot
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_pricing
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-try:
-    import openai
-except ImportError:
-    openai = None
-
-try:
-    import anthropic
-except ImportError:
-    anthropic = None
+from .base import BaseEvaluator
 
 
 DEFAULT_EVALUATION_PROMPT = """You are an expert evaluator assessing the quality of an LLM response.
@@ -119,16 +111,11 @@ class LLMJudgeEvaluator(BaseEvaluator):
         return DEFAULT_MODEL_BY_PROVIDER.get(self.provider, DEFAULT_MODEL_BY_PROVIDER["openai"])
 
     def _init_client(self):
-        if self.provider == "openai":
-            if openai is None:
-                raise ImportError("openai package not installed")
-            return openai.OpenAI(api_key=self.api_key)
-        elif self.provider == "anthropic":
-            if anthropic is None:
-                raise ImportError("anthropic package not installed")
-            return anthropic.Anthropic(api_key=self.api_key)
-        else:
-            raise ValueError(f"Unsupported provider: {self.provider}")
+        return Bot(
+            provider=self.provider,
+            api_key=self.api_key,
+            model=self.model,
+        )
 
     def _build_prompt(self, output: str, reference: str = None, input_text: str = None) -> str:
         if self.custom_prompt:
@@ -205,32 +192,23 @@ class LLMJudgeEvaluator(BaseEvaluator):
         return result
 
     def _call_openai(self, prompt: str) -> str:
-        response_format = None
-        if self.decision_mode == "binary":
-            response_format = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "binary_judge_response",
-                    "strict": True,
-                    "schema": BinaryJudgeResponse.model_json_schema(),
-                },
-            }
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
+        return self.client.complete(
+            [{"role": "user", "content": prompt}],
             max_tokens=500,
             temperature=0.3,
-            **({"response_format": response_format} if response_format else {}),
+            response_schema=(
+                BinaryJudgeResponse.model_json_schema()
+                if self.decision_mode == "binary"
+                else None
+            ),
         )
-        return response.choices[0].message.content
 
     def _call_anthropic(self, prompt: str) -> str:
-        response = self.client.messages.create(
-            model=self.model,
+        return self.client.complete(
+            [{"role": "user", "content": prompt}],
             max_tokens=500,
-            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
         )
-        return response.content[0].text
 
     def evaluate_single(self, output: str, reference: str = None, input_text: str = None) -> dict:
         prompt = self._build_prompt(output, reference, input_text)
