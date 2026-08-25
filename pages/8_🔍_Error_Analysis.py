@@ -7,6 +7,7 @@ Implements grounded theory approach: Open Coding → Axial Coding → Failure Ta
 
 import streamlit as st
 import pandas as pd
+import hashlib
 import json
 import os
 from datetime import datetime
@@ -19,6 +20,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from components.models import init_session_state, ColumnMapping, DataSourceType
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_ids, get_model_label
 from components.error_discovery import generate_taxonomy_suggestions
+from components.eval_workflow import (
+    build_evaluator_definition,
+    build_review_bundle,
+    dataframe_to_records,
+    find_related_records,
+    normalize_trace_segments,
+    select_diverse_samples,
+    summarize_coverage,
+)
 from components.ui import (
     inject_custom_css,
     animated_metric,
@@ -67,6 +77,18 @@ if "taxonomy_suggestions" not in st.session_state:
 if "dismissed_taxonomy_suggestions" not in st.session_state:
     st.session_state.dismissed_taxonomy_suggestions = []
 
+if "related_trace_suggestions" not in st.session_state:
+    st.session_state.related_trace_suggestions = {}
+
+if "promoted_evaluators" not in st.session_state:
+    st.session_state.promoted_evaluators = {}
+
+if "principal_reviewer_name" not in st.session_state:
+    st.session_state.principal_reviewer_name = ""
+
+if "principal_reviewer_role" not in st.session_state:
+    st.session_state.principal_reviewer_role = ""
+
 theme = get_current_theme()
 
 # Header
@@ -114,8 +136,42 @@ else:
     mapping = ColumnMapping(output_col=text_col)
 
 total = len(df)
+if total == 0:
+    st.warning("⚠️ The loaded dataset has no rows to review.")
+    st.stop()
+
+records = dataframe_to_records(df)
+default_dimension_fields = [
+    column
+    for column in df.columns
+    if str(column).casefold() in {"feature", "scenario", "persona"}
+]
+dataset_digest = hashlib.sha256(
+    json.dumps(records, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+).hexdigest()
+dataset_signature = f"{st.session_state.get('dataset_filename')}:{dataset_digest}"
+previous_dataset_signature = st.session_state.get("error_discovery_dataset_signature")
+if previous_dataset_signature != dataset_signature:
+    if previous_dataset_signature is not None:
+        st.session_state.failure_modes = {}
+        st.session_state.trace_annotations = {}
+        st.session_state.open_codes = []
+        st.session_state.taxonomy_suggestions = []
+        st.session_state.dismissed_taxonomy_suggestions = []
+    st.session_state.error_discovery_dataset_signature = dataset_signature
+    st.session_state.discovery_samples = select_diverse_samples(
+        records,
+        sample_size=min(30, total),
+        seed=42,
+        dimension_fields=default_dimension_fields,
+    )
+    st.session_state.discovery_sample_position = 0
+    st.session_state.related_trace_suggestions = {}
+    st.session_state.promoted_evaluators = {}
+
 annotations = st.session_state.trace_annotations
 failure_modes = st.session_state.failure_modes
+discovery_samples = st.session_state.discovery_samples
 
 # Sidebar - Workflow phases
 with st.sidebar:
@@ -131,6 +187,51 @@ with st.sidebar:
         ["📖 Open Coding", "🔗 Axial Coding", "📊 Taxonomy Dashboard"],
         label_visibility="collapsed"
     )
+
+    with st.expander("🧭 Discovery Sample", expanded=False):
+        st.text_input(
+            "Principal domain expert",
+            key="principal_reviewer_name",
+            help="The person whose judgment defines acceptable product behavior.",
+        )
+        st.text_input(
+            "Expert role",
+            key="principal_reviewer_role",
+            placeholder="e.g., Support Director",
+        )
+        selected_dimension_fields = st.multiselect(
+            "Coverage dimensions",
+            list(df.columns),
+            default=default_dimension_fields,
+            help="Product dimensions such as feature, scenario, or persona.",
+        )
+        requested_sample_size = st.number_input(
+            "Sample size",
+            min_value=1,
+            max_value=total,
+            value=min(max(1, len(discovery_samples)), total),
+            help="Mixes cluster representatives with random exploration records.",
+        )
+        discovery_seed = st.number_input("Sampling seed", min_value=0, value=42)
+        if st.button("Regenerate diverse sample", use_container_width=True):
+            st.session_state.discovery_samples = select_diverse_samples(
+                records,
+                sample_size=int(requested_sample_size),
+                seed=int(discovery_seed),
+                dimension_fields=selected_dimension_fields,
+            )
+            st.session_state.discovery_sample_position = 0
+            discovery_samples = st.session_state.discovery_samples
+            st.rerun()
+        representative_count = sum(
+            sample.get("strategy") in {"cluster_representative", "dimension_coverage"}
+            for sample in discovery_samples
+        )
+        st.caption(
+            f"{len(discovery_samples)} selected · "
+            f"{representative_count} coverage selections"
+        )
+        st.warning("Use this sample to discover failure modes, not to estimate prevalence.")
 
     st.markdown("---")
 
@@ -193,9 +294,26 @@ if phase == "📖 Open Coding":
     """, unsafe_allow_html=True)
 
     # Navigation
-    nav_mode = st.radio("Navigation", ["Sequential", "Failures Only", "Unannotated"], horizontal=True)
+    nav_mode = st.radio(
+        "Navigation",
+        ["Diverse Sample", "Sequential", "Failures Only", "Unannotated"],
+        horizontal=True,
+    )
 
-    if nav_mode == "Sequential":
+    if nav_mode == "Diverse Sample":
+        sample_indices = [int(item["index"]) for item in discovery_samples]
+        sample_position = min(
+            int(st.session_state.get("discovery_sample_position", 0)),
+            len(sample_indices) - 1,
+        )
+        st.session_state.discovery_sample_position = sample_position
+        idx = sample_indices[sample_position]
+        selected_sample = discovery_samples[sample_position]
+        st.caption(
+            f"Discovery sample {sample_position + 1} of {len(sample_indices)} · "
+            f"{selected_sample.get('reason', 'Coverage sample')}"
+        )
+    elif nav_mode == "Sequential":
         if "error_idx" not in st.session_state:
             st.session_state.error_idx = 0
         idx = st.session_state.error_idx
@@ -218,18 +336,45 @@ if phase == "📖 Open Coding":
     # Navigation buttons
     col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
     with col1:
-        if st.button("← Prev", use_container_width=True, disabled=(idx == 0)):
-            st.session_state.error_idx = max(0, idx - 1)
+        previous_disabled = sample_position == 0 if nav_mode == "Diverse Sample" else idx == 0
+        if st.button("← Prev", use_container_width=True, disabled=previous_disabled):
+            if nav_mode == "Diverse Sample":
+                st.session_state.discovery_sample_position = max(0, sample_position - 1)
+            else:
+                st.session_state.error_idx = max(0, idx - 1)
             st.rerun()
     with col2:
-        if st.button("Next →", use_container_width=True, disabled=(idx >= total - 1)):
-            st.session_state.error_idx = min(total - 1, idx + 1)
+        next_disabled = (
+            sample_position >= len(sample_indices) - 1
+            if nav_mode == "Diverse Sample"
+            else idx >= total - 1
+        )
+        if st.button("Next →", use_container_width=True, disabled=next_disabled):
+            if nav_mode == "Diverse Sample":
+                st.session_state.discovery_sample_position = min(
+                    len(sample_indices) - 1,
+                    sample_position + 1,
+                )
+            else:
+                st.session_state.error_idx = min(total - 1, idx + 1)
             st.rerun()
     with col3:
-        jump = st.number_input("Jump to trace #", 1, total, idx + 1, label_visibility="collapsed")
+        if nav_mode == "Diverse Sample":
+            jump = st.number_input(
+                "Jump to sample #",
+                1,
+                len(sample_indices),
+                sample_position + 1,
+                label_visibility="collapsed",
+            )
+        else:
+            jump = st.number_input("Jump to trace #", 1, total, idx + 1, label_visibility="collapsed")
     with col4:
         if st.button("Go", use_container_width=True):
-            st.session_state.error_idx = jump - 1
+            if nav_mode == "Diverse Sample":
+                st.session_state.discovery_sample_position = jump - 1
+            else:
+                st.session_state.error_idx = jump - 1
             st.rerun()
     with col5:
         status = "✅" if idx in annotations and annotations[idx].get("pass_fail", True) else "❌" if idx in annotations else "○"
@@ -250,6 +395,21 @@ if phase == "📖 Open Coding":
 
     row = df.iloc[idx]
     existing = annotations.get(idx, {})
+
+    trace_segments = normalize_trace_segments(records[idx])
+    if trace_segments:
+        st.markdown(f"<h4 style=\"color: {theme.text_primary};\">🧩 Agent Trace</h4>", unsafe_allow_html=True)
+        for segment in trace_segments:
+            label = (
+                f"{segment['index'] + 1}. {segment['title']} "
+                f"· {segment['kind'].replace('_', ' ')}"
+            )
+            with st.expander(label, expanded=segment["index"] == 0):
+                if segment["content"]:
+                    st.code(segment["content"], language=None)
+                if segment["details"]:
+                    st.json(segment["details"])
+        st.markdown("<br>", unsafe_allow_html=True)
 
     # Display trace
     col1, col2 = st.columns(2)
@@ -289,11 +449,14 @@ if phase == "📖 Open Coding":
 
     with col1:
         open_code = st.text_area(
-            "Open Code / First-Pass Annotation",
+            "Expert Critique / Open Code",
             value=existing.get("open_code", ""),
-            placeholder="Describe what you observe: errors, surprises, or issues. Focus on the FIRST failure...",
+            placeholder=(
+                "Explain why this passes or fails, with enough detail for a new teammate to understand. "
+                "For failures, focus on the first observable problem rather than guessing at its technical cause."
+            ),
             height=120,
-            help="Write free-form notes about what seems wrong or surprising in this trace."
+            help="Detailed critiques later become grounded examples for evaluator development."
         )
 
     with col2:
@@ -322,24 +485,35 @@ if phase == "📖 Open Coding":
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
         if st.button("💾 Save & Next", type="primary", use_container_width=True):
-            annotations[idx] = {
-                "open_code": open_code,
-                "pass_fail": is_pass,
-                "failure_modes": tagged_modes,
-                "timestamp": datetime.now().isoformat(),
-            }
-            st.session_state.trace_annotations = annotations
+            if not st.session_state.principal_reviewer_name.strip():
+                st.error("Identify the principal domain expert in the Discovery Sample sidebar first.")
+            elif not open_code.strip():
+                st.error("Add a detailed critique before saving the verdict.")
+            else:
+                annotations[idx] = {
+                    "open_code": open_code.strip(),
+                    "critique": open_code.strip(),
+                    "pass_fail": is_pass,
+                    "failure_modes": tagged_modes,
+                    "reviewer": st.session_state.principal_reviewer_name,
+                    "reviewer_role": st.session_state.principal_reviewer_role,
+                    "timestamp": datetime.now().isoformat(),
+                }
+                st.session_state.trace_annotations = annotations
 
-            # Add to open codes list if it's a new annotation
-            if open_code and open_code not in st.session_state.open_codes:
-                st.session_state.open_codes.append(open_code)
+                # Add to open codes list if it's a new annotation
+                if open_code not in st.session_state.open_codes:
+                    st.session_state.open_codes.append(open_code.strip())
 
-            st.success("✅ Saved!")
+                st.success("✅ Saved!")
 
-            # Auto-advance
-            if idx < total - 1:
-                st.session_state.error_idx = idx + 1
-                st.rerun()
+                # Auto-advance
+                if nav_mode == "Diverse Sample" and sample_position < len(sample_indices) - 1:
+                    st.session_state.discovery_sample_position = sample_position + 1
+                    st.rerun()
+                elif nav_mode != "Diverse Sample" and idx < total - 1:
+                    st.session_state.error_idx = idx + 1
+                    st.rerun()
 
     with col2:
         if idx in annotations and st.button("🗑️ Clear", use_container_width=True):
@@ -400,6 +574,50 @@ elif phase == "🔗 Axial Coding":
                     st.markdown("**Examples:**")
                     for ex in examples[:3]:
                         st.markdown(f"- {ex[:100]}...")
+
+                if st.button("Find related traces", key=f"find_related_{name}"):
+                    tagged_notes = [
+                        annotation.get("open_code", "")
+                        for annotation in annotations.values()
+                        if name in annotation.get("failure_modes", [])
+                    ]
+                    st.session_state.related_trace_suggestions[name] = find_related_records(
+                        records,
+                        [details.get("description", ""), *examples, *tagged_notes],
+                        exclude_indices=annotations.keys(),
+                        limit=10,
+                    )
+
+                related = st.session_state.related_trace_suggestions.get(name, [])
+                if related:
+                    st.caption("Candidate traces for human confirmation")
+                    for candidate in related:
+                        candidate_idx = int(candidate["index"])
+                        preview_field = mapping.output_col if mapping.output_col in df.columns else df.columns[0]
+                        st.code(str(df.iloc[candidate_idx][preview_field])[:500], language=None)
+                        action_col, score_col = st.columns([2, 1])
+                        with action_col:
+                            already_selected = candidate_idx in {
+                                int(item["index"]) for item in st.session_state.discovery_samples
+                            }
+                            if st.button(
+                                "Added to review queue" if already_selected else "Add to review queue",
+                                key=f"queue_related_{name}_{candidate_idx}",
+                                disabled=already_selected,
+                                use_container_width=True,
+                            ):
+                                st.session_state.discovery_samples.append(
+                                    {
+                                        "index": candidate_idx,
+                                        "cluster": -1,
+                                        "strategy": "targeted_related",
+                                        "reason": f"Related candidate for {name}",
+                                        "similarity": candidate["score"],
+                                    }
+                                )
+                                st.rerun()
+                        with score_col:
+                            st.caption(f"Similarity {candidate['score']:.2f}")
 
                 if st.button(f"🗑️ Delete", key=f"del_{name}"):
                     del failure_modes[name]
@@ -579,6 +797,13 @@ else:  # Taxonomy Dashboard
     with col4:
         animated_metric("Failure Modes", str(len(failure_modes)), "🏷️", delay=4)
 
+    coverage = summarize_coverage(discovery_samples, annotations.keys())
+    st.info(
+        f"Discovery coverage: {coverage['reviewed_selected_count']}/{coverage['selected_count']} "
+        f"selected traces reviewed across {coverage['clusters_reviewed']}/{coverage['clusters_selected']} "
+        "selected clusters. " + coverage["prevalence_warning"]
+    )
+
     st.markdown("<br>", unsafe_allow_html=True)
 
     # Failure mode distribution
@@ -620,12 +845,167 @@ else:  # Taxonomy Dashboard
         else:
             st.info("Tag failures with failure modes in Open Coding to see distribution.")
 
+    if selected_dimension_fields and annotations:
+        section_header("🧩 Reviewed Outcomes by Product Dimension", style="info")
+        dimension_rows = []
+        for annotation_idx, annotation in annotations.items():
+            dimension_rows.append(
+                {
+                    **{
+                        field: records[annotation_idx].get(field, "(missing)")
+                        for field in selected_dimension_fields
+                    },
+                    "Failed": 0 if annotation.get("pass_fail", True) else 1,
+                }
+            )
+        dimension_df = pd.DataFrame(dimension_rows)
+        grouped_dimensions = (
+            dimension_df.groupby(selected_dimension_fields, dropna=False)["Failed"]
+            .agg([("Reviewed", "size"), ("Failures", "sum"), ("Failure Rate", "mean")])
+            .reset_index()
+        )
+        grouped_dimensions["Failure Rate"] = grouped_dimensions["Failure Rate"].map(
+            lambda value: f"{value * 100:.1f}%"
+        )
+        st.dataframe(grouped_dimensions, use_container_width=True, hide_index=True)
+        st.caption(
+            "Descriptive results for reviewed records only. If these records came from diverse or targeted "
+            "sampling, the rates are not production prevalence estimates."
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Evaluator promotion
+    section_header("🧪 Promote a Failure Mode", style="info")
+
+    if failure_modes:
+        st.markdown(
+            "Turn one human-accepted failure mode into a focused binary evaluator. "
+            "New evaluators remain drafts until they pass held-out label validation."
+        )
+        promote_col1, promote_col2 = st.columns(2)
+        with promote_col1:
+            promoted_mode = st.selectbox(
+                "Failure mode",
+                sorted(failure_modes),
+                key="promote_failure_mode",
+            )
+            evaluator_kind = st.selectbox(
+                "Evaluator type",
+                ["llm_judge", "regex", "contains"],
+                format_func=lambda value: {
+                    "llm_judge": "LLM judge",
+                    "regex": "Regex rule",
+                    "contains": "Contains rule",
+                }[value],
+                key="promote_evaluator_kind",
+            )
+        with promote_col2:
+            default_fields = [
+                value
+                for value in (mapping.input_col, mapping.output_col, mapping.expected_col)
+                if value in df.columns
+            ]
+            promoted_fields = st.multiselect(
+                "Evaluator input fields",
+                list(df.columns),
+                default=default_fields or list(df.columns[: min(3, len(df.columns))]),
+                key="promote_input_fields",
+            )
+            pass_definition = st.text_area(
+                "Pass definition (optional)",
+                placeholder="Describe what acceptable behavior looks like for this failure mode.",
+                height=80,
+                key="promote_pass_definition",
+            )
+
+        rule_pattern = None
+        if evaluator_kind in {"regex", "contains"}:
+            rule_pattern = st.text_input(
+                "Failure pattern",
+                help="A match means Fail. Regex syntax is used only for regex evaluators.",
+                key="promote_rule_pattern",
+            )
+
+        errors_reviewed = st.checkbox(
+            "Obvious product errors were fixed or reviewed, and a specialized evaluator is still useful",
+            help="Pervasive errors should be fixed and re-reviewed before investing in judge automation.",
+        )
+
+        if st.button("Create draft evaluator", type="primary", disabled=not errors_reviewed):
+            try:
+                failure_examples = []
+                pass_examples = []
+                for annotation_idx, annotation in annotations.items():
+                    critique = str(annotation.get("critique") or annotation.get("open_code") or "").strip()
+                    if not critique:
+                        continue
+                    expert_example = {
+                        "input": {
+                            field: records[annotation_idx].get(field)
+                            for field in promoted_fields
+                            if field in records[annotation_idx]
+                        },
+                        "critique": critique,
+                        "result": (
+                            "Fail"
+                            if promoted_mode in annotation.get("failure_modes", [])
+                            else "Pass"
+                        ),
+                        "annotation_id": str(annotation_idx),
+                    }
+                    if expert_example["result"] == "Fail":
+                        failure_examples.append(expert_example)
+                    elif annotation.get("pass_fail", True):
+                        pass_examples.append(expert_example)
+                expert_examples = [*failure_examples[:4], *pass_examples[:4]]
+                source_annotation_ids = [
+                    example["annotation_id"] for example in expert_examples
+                ]
+                evaluator = build_evaluator_definition(
+                    promoted_mode,
+                    failure_modes[promoted_mode],
+                    kind=evaluator_kind,
+                    input_fields=promoted_fields,
+                    pass_definition=pass_definition or None,
+                    rule_pattern=rule_pattern,
+                    source_annotation_ids=source_annotation_ids,
+                    expert_examples=expert_examples,
+                    errors_reviewed=errors_reviewed,
+                )
+                st.session_state.promoted_evaluators[evaluator["evaluator_id"]] = evaluator
+                st.success("Draft evaluator created. Validate it before using it for release decisions.")
+            except ValueError as error:
+                st.error(str(error))
+
+        promoted_for_mode = [
+            evaluator
+            for evaluator in st.session_state.promoted_evaluators.values()
+            if evaluator.get("name") == promoted_mode
+        ]
+        if promoted_for_mode:
+            evaluator = promoted_for_mode[-1]
+            st.warning(
+                "Status: draft_unvalidated. Export human labels, create train/dev/test splits, "
+                "and validate true-pass and true-fail rates before gating CI."
+            )
+            if evaluator.get("prompt"):
+                with st.expander("Inspect judge prompt"):
+                    st.code(evaluator["prompt"], language=None)
+            st.download_button(
+                "Download evaluator definition",
+                json.dumps(evaluator, indent=2, default=str),
+                f"{evaluator['evaluator_id']}.json",
+            )
+    else:
+        st.info("Create and accept at least one failure mode before promoting an evaluator.")
+
     st.markdown("<br>", unsafe_allow_html=True)
 
     # Export section
     section_header("💾 Export Analysis", style="success")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         export_annotations = [
@@ -668,6 +1048,33 @@ else:  # Taxonomy Dashboard
             use_container_width=True,
         )
 
+    with col4:
+        review_bundle = build_review_bundle(
+            records,
+            discovery_samples,
+            annotations=annotations,
+            taxonomy=failure_modes,
+            suggestions={
+                "pending_taxonomy": st.session_state.taxonomy_suggestions,
+                "dismissed_taxonomy": st.session_state.dismissed_taxonomy_suggestions,
+                "related_traces": st.session_state.related_trace_suggestions,
+            },
+            evaluators=st.session_state.promoted_evaluators,
+            source=st.session_state.get("dataset_filename"),
+            reviewer={
+                "name": st.session_state.principal_reviewer_name,
+                "role": st.session_state.principal_reviewer_role,
+            },
+            dimension_fields=selected_dimension_fields,
+        )
+        st.download_button(
+            "📦 Download Review Bundle",
+            json.dumps(review_bundle, indent=2, default=str),
+            "vectory_review_bundle.json",
+            use_container_width=True,
+            help="Portable dataset, sample rationale, annotations, taxonomy, suggestions, and draft evaluators.",
+        )
+
     st.markdown("<br>", unsafe_allow_html=True)
 
     # Failure examples table
@@ -706,4 +1113,13 @@ if st.sidebar.button("🗑️ Reset All Analysis"):
     st.session_state.failure_modes = {}
     st.session_state.trace_annotations = {}
     st.session_state.open_codes = []
+    st.session_state.related_trace_suggestions = {}
+    st.session_state.promoted_evaluators = {}
+    st.session_state.discovery_samples = select_diverse_samples(
+        records,
+        sample_size=min(30, total),
+        seed=42,
+        dimension_fields=default_dimension_fields,
+    )
+    st.session_state.discovery_sample_position = 0
     st.rerun()

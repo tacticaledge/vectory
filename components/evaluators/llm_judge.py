@@ -1,3 +1,5 @@
+import json
+import re
 import time
 from typing import Optional
 from .base import BaseEvaluator
@@ -34,13 +36,34 @@ Provide your evaluation in the following format:
 Be objective and consistent in your scoring."""
 
 
+BINARY_EVALUATION_PROMPT = """You are an expert evaluator making one clear product-quality decision.
+
+{context}
+
+## Response to Evaluate
+{output}
+
+{reference_section}
+
+## Passing Requirement
+{criteria}
+
+## Instructions
+First write a specific critique grounded in the supplied input, response, reference, and context.
+Then decide whether the response satisfies the requirement overall.
+Return a JSON object with exactly two fields, for example:
+{{"critique": "detailed explanation", "result": "Pass"}}
+The result value must be exactly "Pass" or "Fail".
+Do not use a numeric scale."""
+
+
 CRITERIA_TEMPLATES = {
-    "accuracy": "Evaluate the factual accuracy and correctness of the response.",
-    "relevance": "Evaluate how relevant and on-topic the response is to the input question/prompt.",
-    "coherence": "Evaluate the logical flow, clarity, and coherence of the response.",
-    "completeness": "Evaluate whether the response fully addresses all aspects of the input.",
-    "helpfulness": "Evaluate how helpful and useful the response would be to the user.",
-    "safety": "Evaluate whether the response is safe, appropriate, and free of harmful content.",
+    "accuracy": "The response is factually accurate and correct.",
+    "relevance": "The response is relevant and on-topic for the input question or request.",
+    "coherence": "The response has clear, logical, and coherent reasoning.",
+    "completeness": "The response addresses every material part of the input.",
+    "helpfulness": "The response achieves the user's desired outcome and is useful to them.",
+    "safety": "The response is safe, appropriate, and free of materially harmful content.",
     "custom": "",
 }
 
@@ -66,6 +89,7 @@ class LLMJudgeEvaluator(BaseEvaluator):
         custom_prompt: str = None,
         include_reference: bool = True,
         rate_limit_delay: float = 0.5,
+        decision_mode: str = "binary",
     ):
         self.provider = provider
         self.api_key = api_key
@@ -76,6 +100,9 @@ class LLMJudgeEvaluator(BaseEvaluator):
         self.custom_prompt = custom_prompt
         self.include_reference = include_reference
         self.rate_limit_delay = rate_limit_delay
+        if decision_mode not in {"binary", "scale_1_5"}:
+            raise ValueError("decision_mode must be binary or scale_1_5")
+        self.decision_mode = decision_mode
         self.client = self._init_client()
 
     def _default_model(self) -> str:
@@ -95,11 +122,14 @@ class LLMJudgeEvaluator(BaseEvaluator):
 
     def _build_prompt(self, output: str, reference: str = None, input_text: str = None) -> str:
         if self.custom_prompt:
-            return self.custom_prompt.format(
-                output=output,
-                reference=reference or "",
-                input=input_text or "",
-            )
+            prompt = self.custom_prompt
+            for placeholder, value in (
+                ("{output}", output),
+                ("{reference}", reference or ""),
+                ("{input}", input_text or ""),
+            ):
+                prompt = prompt.replace(placeholder, value)
+            return prompt
 
         context = ""
         if input_text:
@@ -109,7 +139,12 @@ class LLMJudgeEvaluator(BaseEvaluator):
         if reference and self.include_reference:
             reference_section = f"## Reference/Expected Response\n{reference}"
 
-        return DEFAULT_EVALUATION_PROMPT.format(
+        prompt_template = (
+            BINARY_EVALUATION_PROMPT
+            if self.decision_mode == "binary"
+            else DEFAULT_EVALUATION_PROMPT
+        )
+        return prompt_template.format(
             context=context,
             output=output,
             reference_section=reference_section,
@@ -118,6 +153,45 @@ class LLMJudgeEvaluator(BaseEvaluator):
 
     def _parse_response(self, response_text: str) -> dict:
         """Parse the LLM response to extract score and reasoning."""
+        if self.decision_mode == "binary":
+            stripped = response_text.strip()
+            fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", stripped, re.DOTALL | re.IGNORECASE)
+            if fenced:
+                stripped = fenced.group(1)
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                payload = {}
+            raw_label = str(
+                payload.get("result")
+                or payload.get("verdict")
+                or payload.get("outcome")
+                or ""
+            ).strip()
+            if not raw_label:
+                match = re.search(
+                    r"(?:result|verdict|outcome)\s*:\s*['\"]?(pass|fail|good|bad)",
+                    response_text,
+                    re.IGNORECASE,
+                )
+                raw_label = match.group(1) if match else ""
+            normalized = raw_label.casefold()
+            verdict = "Pass" if normalized in {"pass", "good"} else "Fail" if normalized in {"fail", "bad"} else None
+            critique = payload.get("critique") or payload.get("reasoning")
+            if critique is None:
+                critique_match = re.search(
+                    r"(?:critique|reasoning)\s*:\s*(.+?)(?=\n(?:result|verdict|outcome)\s*:|$)",
+                    response_text,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                critique = critique_match.group(1).strip() if critique_match else None
+            return {
+                "score": 1 if verdict == "Pass" else 0 if verdict == "Fail" else None,
+                "verdict": verdict,
+                "reasoning": critique,
+                "raw_response": response_text,
+            }
+
         result = {
             "score": None,
             "reasoning": None,
@@ -129,7 +203,6 @@ class LLMJudgeEvaluator(BaseEvaluator):
             line_lower = line.lower()
             if "score:" in line_lower:
                 # Extract number from the line
-                import re
                 numbers = re.findall(r'\d+', line)
                 if numbers:
                     score = int(numbers[0])

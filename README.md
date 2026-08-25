@@ -9,9 +9,9 @@
 ## Features
 
 - **📊 Dataset Management** - Upload JSON, CSV, or PDF files. Automatic column detection and mapping.
-- **🤖 LLM-as-Judge** - Use current OpenAI or Anthropic models to automatically evaluate output quality with customizable criteria.
+- **🤖 LLM-as-Judge** - Run critique-first binary judges by default, import promoted failure-mode evaluators, and retain exploratory 1–5 scoring for compatibility.
 - **📏 Rule-Based Metrics** - Calculate BLEU, ROUGE, exact match, Levenshtein similarity, and regex patterns.
-- **🔍 Error Analysis** - Discover failure modes with open coding, axial coding, taxonomy dashboards, and AI-assisted taxonomy suggestions.
+- **🔍 Error Analysis** - Review diverse trace samples, capture expert Pass/Fail critiques, discover failure modes, find related examples, and promote focused evaluators.
 - **🔎 RAG Metrics** - Evaluate retrieval precision, recall, MRR, NDCG, context relevance, faithfulness, and answer completeness.
 - **👤 Human Evaluation** - Rate outputs manually with customizable scales and criteria.
 - **🏆 MTEB Leaderboard** - View embedding model benchmarks from the Massive Text Embedding Benchmark.
@@ -34,6 +34,28 @@ vectory app
 ```
 
 The app opens in your browser at `http://localhost:8501`.
+
+Create a portable failure-discovery workspace directly from AI outputs or traces:
+
+```bash
+vectory discover traces.jsonl \
+  --workspace eval-review \
+  --sample-size 30 \
+  --dimension-fields feature scenario persona
+```
+
+After expert review and taxonomy acceptance, promote and validate a focused evaluator:
+
+```bash
+vectory promote eval-review "Unsupported claim" --errors-reviewed
+vectory split-labels judge-labels.jsonl --label-column human_label --out judge-splits
+vectory validate-judge judge-splits/test.jsonl \
+  --human-column human_label \
+  --judge-column judge_label \
+  --out judge-validation.json
+```
+
+See the [human-grounded evaluation workflow](docs/evaluation_workflow.md) for the app flow, artifact schema, validation metrics, and CI behavior.
 
 Run the included agent benchmark example from the CLI:
 
@@ -177,10 +199,10 @@ The app will automatically detect column roles, or you can map them manually.
 Choose your evaluation method:
 
 #### LLM-as-Judge (🤖)
-- Select provider (OpenAI or Anthropic)
-- Enter your API key
-- Choose evaluation criteria
-- Run batch evaluation
+- Start with a critique-first binary Pass/Fail decision
+- Load a focused evaluator promoted from observed failure modes
+- Select OpenAI or Anthropic and run batch predictions
+- Validate predictions against held-out domain-expert labels before release gating
 
 #### Rule-Based Metrics (📏)
 - Select metrics (BLEU, ROUGE, exact match, etc.)
@@ -188,10 +210,13 @@ Choose your evaluation method:
 - View per-sample and aggregate results
 
 #### Error Analysis (🔍)
-- Review traces using open coding and pass/fail decisions
+- Review a coverage-oriented sample of complete traces on one screen
+- Capture required critiques from the principal domain expert with binary verdicts
 - Group notes into a structured failure-mode taxonomy
 - Generate AI-assisted taxonomy suggestions from reviewer notes
-- Export annotations, taxonomies, and summary reports
+- Find related traces for human confirmation and analyze reviewed outcomes by product dimension
+- Promote failure modes into draft binary evaluators
+- Export annotations, taxonomies, evaluators, and a portable review bundle
 
 #### Human Evaluation (👤)
 - Navigate through samples

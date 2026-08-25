@@ -214,9 +214,11 @@ with c1:
     rating_type = st.radio(
         "Rating Type",
         [rt.value for rt in RatingType],
+        index=[rt.value for rt in RatingType].index(RatingType.PASS_FAIL.value),
         horizontal=True,
         key=f"rt_{idx}",
         label_visibility="collapsed",
+        help="Start with Pass/Fail. Use richer scales only when the decision boundaries are calibrated.",
     )
 
     if rating_type == RatingType.SCALE_1_5.value:
@@ -257,9 +259,9 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 feedback = st.text_area(
-    "Notes (optional)",
+    "Detailed critique (required)",
     existing.get("feedback", ""),
-    placeholder="Any additional feedback...",
+    placeholder="Explain why this verdict is correct, with enough context for a new teammate to understand.",
     label_visibility="collapsed",
 )
 
@@ -294,26 +296,29 @@ c1, c2, _ = st.columns([1, 1, 2])
 
 with c1:
     if st.button("💾 Save Annotation", type="primary", use_container_width=True):
-        annotations[idx] = {
-            "rating": rating,
-            "rating_type": rating_type,
-            "criteria": criteria,
-            "feedback": feedback,
-            "timestamp": datetime.now().isoformat(),
-        }
-        st.session_state.human_annotations = annotations
+        if not feedback.strip():
+            st.error("Add a detailed critique before saving the verdict.")
+        else:
+            annotations[idx] = {
+                "rating": rating,
+                "rating_type": rating_type,
+                "criteria": criteria,
+                "feedback": feedback.strip(),
+                "timestamp": datetime.now().isoformat(),
+            }
+            st.session_state.human_annotations = annotations
 
-        st.markdown("""
-        <div style="background: linear-gradient(-45deg, #6366f1, #8b5cf6, #a855f7, #4f46e5); background-size: 400% 400%; border-radius: 12px; padding: 20px; color: white; text-align: center;">
-            <span style="font-size: 1.5rem;">✅</span>
-            <p style="margin: 8px 0 0 0; color: white;">Annotation saved!</p>
-        </div>
-        """, unsafe_allow_html=True)
+            st.markdown("""
+            <div style="background: linear-gradient(-45deg, #6366f1, #8b5cf6, #a855f7, #4f46e5); background-size: 400% 400%; border-radius: 12px; padding: 20px; color: white; text-align: center;">
+                <span style="font-size: 1.5rem;">✅</span>
+                <p style="margin: 8px 0 0 0; color: white;">Annotation saved!</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-        # Auto-advance
-        if nav_mode == "Sequential" and idx < total - 1:
-            st.session_state.current_idx = idx + 1
-            st.rerun()
+            # Auto-advance
+            if nav_mode == "Sequential" and idx < total - 1:
+                st.session_state.current_idx = idx + 1
+                st.rerun()
 
 with c2:
     if idx in annotations and st.button("🗑️ Clear", use_container_width=True):
