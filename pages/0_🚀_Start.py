@@ -89,7 +89,8 @@ elif goal == "Build or validate an evaluator":
         st.code(
             "vectory split-labels labels.jsonl --label-column human_label --out eval-splits\n"
             "vectory validate-judge eval-splits/test.jsonl --human-column human_label "
-            "--judge-column judge_label --out validation.json",
+            "--judge-column judge_label --split-manifest eval-splits/split_manifest.json "
+            "--out validation.json",
             language="bash",
         )
 

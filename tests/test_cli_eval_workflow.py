@@ -128,25 +128,30 @@ def test_split_and_validate_judge_gate(tmp_path):
 
 
 def test_validate_judge_fails_ci_when_one_class_is_missed(tmp_path):
-    labels = tmp_path / "test.jsonl"
+    labels = tmp_path / "labels.jsonl"
     write_jsonl(
         labels,
         [
-            {"human": "Pass", "judge": "Pass"},
-            {"human": "Pass", "judge": "Pass"},
-            {"human": "Fail", "judge": "Pass"},
-            {"human": "Fail", "judge": "Pass"},
+            {"id": index, "human": label, "judge": "Pass"}
+            for label in ("Pass", "Fail")
+            for index in range(4)
         ],
     )
+    split_dir = tmp_path / "splits"
+    assert main(
+        ["split-labels", str(labels), "--label-column", "human", "--out", str(split_dir)]
+    ) == 0
 
     assert main(
         [
             "validate-judge",
-            str(labels),
+            str(split_dir / "test.jsonl"),
             "--human-column",
             "human",
             "--judge-column",
             "judge",
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
             "--bootstrap-iterations",
             "50",
         ]
@@ -182,6 +187,23 @@ def test_validate_judge_rejects_dataset_that_does_not_match_split_manifest(tmp_p
                 "judge",
                 "--split-manifest",
                 str(split_dir / "split_manifest.json"),
+            ]
+        )
+
+
+def test_validate_judge_requires_verified_split_manifest(tmp_path):
+    labels = tmp_path / "labels.jsonl"
+    write_jsonl(labels, [{"human": "Pass", "judge": "Pass"}])
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "validate-judge",
+                str(labels),
+                "--human-column",
+                "human",
+                "--judge-column",
+                "judge",
             ]
         )
 

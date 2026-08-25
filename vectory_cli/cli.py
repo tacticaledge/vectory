@@ -359,15 +359,9 @@ def run_validate_judge(args: argparse.Namespace) -> int:
     if not 0 <= args.min_tpr <= 1 or not 0 <= args.min_tnr <= 1:
         raise ValueError("TPR and TNR thresholds must be between 0 and 1")
     records = _load_records(args.dataset)
-    provenance = (
-        _verify_test_split_provenance(
-            args.dataset, records, args.split_manifest, args.human_column
-        )
-        if args.split_manifest
-        else {"verified": False, "reason": "No split manifest supplied"}
+    provenance = _verify_test_split_provenance(
+        args.dataset, records, args.split_manifest, args.human_column
     )
-    if args.evaluator and not provenance["verified"]:
-        raise ValueError("--split-manifest is required before an evaluator can be marked validated")
     missing = [
         column
         for column in (args.human_column, args.judge_column)
@@ -410,7 +404,7 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         "schema_version": "1.0",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dataset": str(args.dataset),
-        "dataset_role": "held_out_test" if provenance["verified"] else "unverified_dataset",
+        "dataset_role": "held_out_test",
         "provenance": provenance,
         "human_label_column": args.human_column,
         "evaluator_label_column": args.judge_column,
@@ -606,6 +600,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument(
         "--split-manifest",
         type=Path,
+        required=True,
         help="Manifest used to verify that the dataset is the untouched held-out test partition.",
     )
     validate_parser.add_argument(

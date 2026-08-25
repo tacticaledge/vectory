@@ -31,7 +31,7 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
 5. Once evaluator predictions have been added to the held-out test records, run:
 
-   `vectory validate-judge SPLITS/test.jsonl --human-column HUMAN_LABEL --judge-column JUDGE_LABEL --out REPORT`
+   `vectory validate-judge SPLITS/test.jsonl --human-column HUMAN_LABEL --judge-column JUDGE_LABEL --split-manifest SPLITS/split_manifest.json --out REPORT`
 
    A nonzero exit status means the evaluator must not gate releases. Use `--group-by` with product dimensions such as feature, scenario, and persona when those fields exist.
 
