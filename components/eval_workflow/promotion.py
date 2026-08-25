@@ -20,6 +20,79 @@ def _example_texts(failure_mode: Mapping[str, Any]) -> list[str]:
     return [str(example).strip() for example in examples if str(example).strip()]
 
 
+def validate_evaluator_definition(
+    value: Mapping[str, Any], *, required_kind: str | None = None
+) -> dict[str, Any]:
+    """Validate the complete portable evaluator contract at an import boundary."""
+    if not isinstance(value, Mapping):
+        raise ValueError("Evaluator definition must be a JSON object")
+    evaluator = dict(value)
+    required_strings = ("schema_version", "evaluator_id", "name", "kind", "status")
+    for field in required_strings:
+        if not isinstance(evaluator.get(field), str) or not evaluator[field].strip():
+            raise ValueError(f"Evaluator definition requires a non-empty {field}")
+    if evaluator["schema_version"] != "1.0":
+        raise ValueError(f"Unsupported evaluator schema_version: {evaluator['schema_version']}")
+    evaluator_id = evaluator["evaluator_id"]
+    if any(char not in "abcdefghijklmnopqrstuvwxyz0123456789-" for char in evaluator_id):
+        raise ValueError("Evaluator definition must have a safe evaluator_id")
+    if evaluator["kind"] not in {"llm_judge", "regex", "contains"}:
+        raise ValueError(f"Unsupported evaluator kind: {evaluator['kind']}")
+    if required_kind and evaluator["kind"] != required_kind:
+        raise ValueError(f"Evaluator kind must be {required_kind}")
+    if evaluator["status"] not in {"draft_unvalidated", "validated", "validation_failed"}:
+        raise ValueError(f"Unsupported evaluator status: {evaluator['status']}")
+
+    input_fields = evaluator.get("input_fields")
+    if not isinstance(input_fields, list) or not input_fields or not all(
+        isinstance(field, str) and field.strip() for field in input_fields
+    ):
+        raise ValueError("Evaluator input_fields must be a non-empty list of strings")
+    decision = evaluator.get("decision")
+    if not isinstance(decision, Mapping) or decision.get("type") != "binary":
+        raise ValueError("Evaluator decision.type must be binary")
+    for field in ("pass_definition", "fail_definition"):
+        if not isinstance(decision.get(field), str) or not decision[field].strip():
+            raise ValueError(f"Evaluator decision requires a non-empty {field}")
+    if not isinstance(evaluator.get("validation"), Mapping):
+        raise ValueError("Evaluator definition requires validation metadata")
+    if not isinstance(evaluator.get("lifecycle_checkpoints"), Mapping):
+        raise ValueError("Evaluator definition requires lifecycle checkpoints")
+
+    examples = evaluator.get("expert_examples")
+    if not isinstance(examples, list):
+        raise ValueError("Evaluator expert_examples must be a list")
+    for example in examples:
+        if not isinstance(example, Mapping) or not isinstance(example.get("input"), Mapping):
+            raise ValueError("Every expert example requires an input object")
+        if not isinstance(example.get("critique"), str) or not example["critique"].strip():
+            raise ValueError("Every expert example requires a non-empty critique")
+        if example.get("result") not in {"Pass", "Fail"}:
+            raise ValueError("Every expert example result must be Pass or Fail")
+
+    if evaluator["kind"] == "llm_judge":
+        prompt = evaluator.get("prompt")
+        if not isinstance(prompt, str) or prompt.count("{{evaluation_input}}") != 1:
+            raise ValueError("LLM judge prompt must contain exactly one {{evaluation_input}} placeholder")
+        output_schema = evaluator.get("output_schema")
+        expected_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["critique", "result"],
+            "properties": {
+                "critique": {"type": "string", "minLength": 1},
+                "result": {"type": "string", "enum": ["Pass", "Fail"]},
+            },
+        }
+        if output_schema != expected_schema:
+            raise ValueError("LLM judge output_schema must match Vectory's strict binary contract")
+    else:
+        rule = evaluator.get("rule")
+        if not isinstance(rule, Mapping) or not isinstance(rule.get("pattern"), str):
+            raise ValueError("Rule evaluator definition requires a string pattern")
+    return evaluator
+
+
 def build_evaluator_definition(
     name: str,
     failure_mode: Mapping[str, Any],
@@ -135,7 +208,7 @@ Return JSON that conforms to the required schema. Write the critique before the 
             "additionalProperties": False,
             "required": ["critique", "result"],
             "properties": {
-                "critique": {"type": "string"},
+                "critique": {"type": "string", "minLength": 1},
                 "result": {"type": "string", "enum": ["Pass", "Fail"]},
             },
         }

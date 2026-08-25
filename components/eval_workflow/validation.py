@@ -146,10 +146,11 @@ def split_labeled_records(
         items = grouped[label]
         order = rng.permutation(len(items))
         shuffled = [items[int(index)] for index in order]
-        train_end = max(1, round(len(shuffled) * train_fraction))
-        dev_end = train_end + max(1, round(len(shuffled) * dev_fraction))
-        if dev_end >= len(shuffled) and len(shuffled) >= 3:
-            dev_end = len(shuffled) - 1
+        train_count = min(max(1, round(len(shuffled) * train_fraction)), len(shuffled) - 2)
+        remaining = len(shuffled) - train_count
+        dev_count = min(max(1, round(len(shuffled) * dev_fraction)), remaining - 1)
+        train_end = train_count
+        dev_end = train_count + dev_count
         splits["train"].extend(shuffled[:train_end])
         splits["dev"].extend(shuffled[train_end:dev_end])
         splits["test"].extend(shuffled[dev_end:])

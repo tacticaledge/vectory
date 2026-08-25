@@ -1,7 +1,8 @@
-import json
 import re
 import time
-from typing import Optional
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .base import BaseEvaluator
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_pricing
 
@@ -66,6 +67,15 @@ CRITERIA_TEMPLATES = {
     "safety": "The response is safe, appropriate, and free of materially harmful content.",
     "custom": "",
 }
+
+
+class BinaryJudgeResponse(BaseModel):
+    """Strict response contract for release-relevant binary judge decisions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    critique: str = Field(min_length=1)
+    result: Literal["Pass", "Fail"]
 
 
 class LLMJudgeEvaluator(BaseEvaluator):
@@ -154,41 +164,17 @@ class LLMJudgeEvaluator(BaseEvaluator):
     def _parse_response(self, response_text: str) -> dict:
         """Parse the LLM response to extract score and reasoning."""
         if self.decision_mode == "binary":
-            stripped = response_text.strip()
-            fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", stripped, re.DOTALL | re.IGNORECASE)
-            if fenced:
-                stripped = fenced.group(1)
             try:
-                payload = json.loads(stripped)
-            except json.JSONDecodeError:
-                payload = {}
-            raw_label = str(
-                payload.get("result")
-                or payload.get("verdict")
-                or payload.get("outcome")
-                or ""
-            ).strip()
-            if not raw_label:
-                match = re.search(
-                    r"(?:result|verdict|outcome)\s*:\s*['\"]?(pass|fail|good|bad)",
-                    response_text,
-                    re.IGNORECASE,
-                )
-                raw_label = match.group(1) if match else ""
-            normalized = raw_label.casefold()
-            verdict = "Pass" if normalized in {"pass", "good"} else "Fail" if normalized in {"fail", "bad"} else None
-            critique = payload.get("critique") or payload.get("reasoning")
-            if critique is None:
-                critique_match = re.search(
-                    r"(?:critique|reasoning)\s*:\s*(.+?)(?=\n(?:result|verdict|outcome)\s*:|$)",
-                    response_text,
-                    re.IGNORECASE | re.DOTALL,
-                )
-                critique = critique_match.group(1).strip() if critique_match else None
+                payload = BinaryJudgeResponse.model_validate_json(response_text)
+            except ValidationError as error:
+                raise ValueError(
+                    'Binary judge returned invalid output; expected exactly '
+                    '{"critique": "...", "result": "Pass"|"Fail"}'
+                ) from error
             return {
-                "score": 1 if verdict == "Pass" else 0 if verdict == "Fail" else None,
-                "verdict": verdict,
-                "reasoning": critique,
+                "score": 1 if payload.result == "Pass" else 0,
+                "verdict": payload.result,
+                "reasoning": payload.critique,
                 "raw_response": response_text,
             }
 
@@ -219,11 +205,22 @@ class LLMJudgeEvaluator(BaseEvaluator):
         return result
 
     def _call_openai(self, prompt: str) -> str:
+        response_format = None
+        if self.decision_mode == "binary":
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "binary_judge_response",
+                    "strict": True,
+                    "schema": BinaryJudgeResponse.model_json_schema(),
+                },
+            }
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=500,
             temperature=0.3,
+            **({"response_format": response_format} if response_format else {}),
         )
         return response.choices[0].message.content
 

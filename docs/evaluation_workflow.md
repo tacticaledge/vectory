@@ -43,6 +43,8 @@ vectory discover traces.jsonl \
   --reviewer-role "Support Director"
 ```
 
+If the workspace already exists, `--force` archives the complete directory to a timestamped sibling before creating a fresh workspace. Human annotations, accepted taxonomy, suggestions, and promoted evaluators are never overwritten in place.
+
 The workspace contains:
 
 | Artifact | Purpose |
@@ -102,6 +104,7 @@ After adding evaluator predictions to the held-out test records:
 vectory validate-judge judge-splits/test.jsonl \
   --human-column human_label \
   --judge-column judge_label \
+  --split-manifest judge-splits/split_manifest.json \
   --min-tpr 0.80 \
   --min-tnr 0.80 \
   --group-by feature scenario persona \
@@ -109,7 +112,7 @@ vectory validate-judge judge-splits/test.jsonl \
   --evaluator eval-review/evaluators/failure-unsupported-claim.json
 ```
 
-The report includes the confusion matrix, balanced accuracy, per-class precision/recall/F1, bootstrap intervals, product-dimension slices, thresholds, and gate result. Updating an evaluator appends the report to its validation history. The command exits nonzero when the gate fails, either class is absent, or the evaluator's fix-review checkpoint is incomplete.
+The split manifest fingerprints every original test record. You may add the judge prediction column after splitting; Vectory verifies that all original fields still match the untouched test partition. The report includes this provenance, the confusion matrix, balanced accuracy, per-class precision/recall/F1, bootstrap intervals, product-dimension slices, thresholds, and gate result. Updating an evaluator requires verified split provenance and appends the report to its validation history. The command exits nonzero when provenance fails, the gate fails, either class is absent, or the evaluator's fix-review checkpoint is incomplete.
 
 Raw agreement alone can be misleading on imbalanced data. Inspect false passes in particular: these are human failures that the automated judge allowed through.
 

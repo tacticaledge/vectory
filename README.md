@@ -52,6 +52,7 @@ vectory split-labels judge-labels.jsonl --label-column human_label --out judge-s
 vectory validate-judge judge-splits/test.jsonl \
   --human-column human_label \
   --judge-column judge_label \
+  --split-manifest judge-splits/split_manifest.json \
   --out judge-validation.json
 ```
 

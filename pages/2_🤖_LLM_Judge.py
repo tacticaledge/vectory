@@ -1,6 +1,7 @@
 """LLM-as-Judge Evaluation Page - With Animations"""
 
 import json
+import hashlib
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -37,6 +38,7 @@ def get_api_key(provider: str) -> str:
 from components.models import init_session_state, ColumnMapping, DataSourceType
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_ids, get_model_label
 from components.evaluators.llm_judge import LLMJudgeEvaluator, estimate_cost, CRITERIA_TEMPLATES
+from components.eval_workflow import validate_evaluator_definition
 from components.ui import (
     inject_custom_css,
     animated_metric,
@@ -124,20 +126,39 @@ icon, label, desc = source_type_labels.get(data_source_type, ("📊", "Data", ""
 st.info(f"{icon} **{label}** - {desc}")
 
 # Optional promoted evaluator from Error Analysis or a portable JSON artifact.
-promoted_evaluator_options = dict(st.session_state.get("promoted_evaluators", {}))
+promoted_evaluator_options = {}
+for stored_id, stored_definition in st.session_state.get("promoted_evaluators", {}).items():
+    try:
+        promoted_evaluator_options[stored_id] = validate_evaluator_definition(
+            stored_definition, required_kind="llm_judge"
+        )
+    except (TypeError, ValueError) as error:
+        st.warning(f"Ignoring incompatible promoted evaluator {stored_id!r}: {error}")
 uploaded_evaluator = st.file_uploader(
     "Optional promoted evaluator definition",
     type=["json"],
     help="Load a binary evaluator exported from the Error Analysis taxonomy dashboard.",
 )
+uploaded_evaluator_id = None
 if uploaded_evaluator is not None:
     try:
-        uploaded_definition = json.load(uploaded_evaluator)
-        if uploaded_definition.get("kind") != "llm_judge" or not uploaded_definition.get("prompt"):
-            raise ValueError("The file must be a promoted llm_judge evaluator definition")
-        evaluator_id = uploaded_definition.get("evaluator_id", "uploaded-evaluator")
-        promoted_evaluator_options[evaluator_id] = uploaded_definition
-    except (json.JSONDecodeError, ValueError) as error:
+        uploaded_bytes = uploaded_evaluator.getvalue()
+        uploaded_definition = validate_evaluator_definition(
+            json.loads(uploaded_bytes), required_kind="llm_judge"
+        )
+        uploaded_evaluator_id = uploaded_definition["evaluator_id"]
+        st.caption(f"Imported evaluator SHA-256: {hashlib.sha256(uploaded_bytes).hexdigest()}")
+        import_approved = st.checkbox(
+            "I reviewed this imported evaluator prompt and approve sending selected records "
+            "and embedded expert examples to the chosen model provider.",
+            key=f"approve-imported-evaluator-{uploaded_evaluator_id}",
+        )
+        if import_approved:
+            uploaded_definition["_imported_untrusted"] = True
+            promoted_evaluator_options[uploaded_evaluator_id] = uploaded_definition
+        else:
+            st.info("The imported evaluator remains disabled until you explicitly approve its prompt.")
+    except (json.JSONDecodeError, TypeError, ValueError) as error:
         st.error(f"Could not load evaluator definition: {error}")
 
 # Configuration section
@@ -219,6 +240,11 @@ with col2:
         st.caption(
             "Running this judge sends the selected records and embedded expert examples to the chosen provider."
         )
+        if selected_promoted_evaluator.get("_imported_untrusted"):
+            st.warning(
+                "This evaluator came from an uploaded file. Its claimed validation status is informational; "
+                "verify it against your own held-out split before using its predictions for decisions."
+            )
         if selected_promoted_evaluator.get("status") != "validated":
             st.warning("This evaluator is not validated. Its predictions must not be treated as ground truth.")
     else:
@@ -328,10 +354,8 @@ Input: {input}
 Response: {output}
 Reference: {reference}
 
-First provide a detailed critique, then return a binary verdict.
-Format:
-Critique: [specific explanation]
-Result: [Pass or Fail]"""
+Return JSON only with exactly these fields:
+{{"critique": "specific explanation", "result": "Pass" or "Fail"}}"""
             if decision_mode == "binary"
             else """Evaluate the following response:
 

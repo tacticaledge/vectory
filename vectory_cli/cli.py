@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -13,6 +14,7 @@ from importlib import resources
 from pathlib import Path
 
 from components.eval_workflow import (
+    archive_review_workspace,
     bootstrap_metric_intervals,
     build_evaluator_definition,
     dataframe_to_records,
@@ -24,6 +26,7 @@ from components.eval_workflow import (
     select_diverse_samples,
     split_labeled_records,
     validate_evaluator_labels,
+    validate_evaluator_definition,
 )
 
 from . import __version__
@@ -154,6 +157,55 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
     save_jsonl_records(path, records)
 
 
+def _records_sha256(records: list[dict], fields: list[str] | None = None) -> str:
+    projected = records
+    if fields is not None:
+        projected = [
+            {field: record[field] for field in fields if field in record}
+            for record in records
+        ]
+    canonical = json.dumps(
+        projected, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _verify_test_split_provenance(
+    dataset: Path, records: list[dict], manifest_path: Path, human_label_column: str
+) -> dict[str, object]:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != "1.0":
+        raise ValueError("Split manifest must use schema_version 1.0")
+    if manifest.get("label_column") != human_label_column:
+        raise ValueError(
+            "Human label column does not match the trusted label column in the split manifest"
+        )
+    test_artifact = (manifest.get("artifacts") or {}).get("test")
+    if not isinstance(test_artifact, dict):
+        raise ValueError("Split manifest does not contain test artifact provenance")
+    fields = test_artifact.get("provenance_fields")
+    expected_hash = test_artifact.get("records_sha256")
+    expected_count = test_artifact.get("record_count")
+    if (
+        not isinstance(fields, list)
+        or not all(isinstance(field, str) for field in fields)
+        or not isinstance(expected_hash, str)
+        or not isinstance(expected_count, int)
+    ):
+        raise ValueError("Split manifest test provenance is incomplete")
+    if len(records) != expected_count or _records_sha256(records, fields) != expected_hash:
+        raise ValueError(
+            "Validation dataset does not match the untouched test partition in the split manifest"
+        )
+    return {
+        "verified": True,
+        "split_manifest": str(manifest_path),
+        "test_artifact": str(dataset),
+        "records_sha256": expected_hash,
+        "record_count": expected_count,
+    }
+
+
 def run_discover(args: argparse.Namespace) -> int:
     if args.sample_size <= 0:
         raise ValueError("Sample size must be positive")
@@ -161,7 +213,11 @@ def run_discover(args: argparse.Namespace) -> int:
         raise ValueError("Cluster count must be positive")
     manifest_path = args.workspace / "manifest.json"
     if manifest_path.exists() and not args.force:
-        raise ValueError(f"Workspace already exists: {args.workspace}. Pass --force to refresh its core artifacts.")
+        raise ValueError(
+            f"Workspace already exists: {args.workspace}. Pass --force to archive it and create a fresh workspace."
+        )
+    if args.workspace.exists() and not manifest_path.exists() and any(args.workspace.iterdir()):
+        raise ValueError(f"Refusing to replace non-workspace directory: {args.workspace}")
     records = _load_records(args.dataset)
     samples = select_diverse_samples(
         records,
@@ -170,6 +226,9 @@ def run_discover(args: argparse.Namespace) -> int:
         cluster_count=args.clusters,
         dimension_fields=args.dimension_fields,
     )
+    archived_workspace = None
+    if manifest_path.exists():
+        archived_workspace = archive_review_workspace(args.workspace)
     initialize_review_workspace(
         args.workspace,
         records,
@@ -187,6 +246,8 @@ def run_discover(args: argparse.Namespace) -> int:
         for item in samples
     )
     print(f"Created review workspace: {args.workspace}")
+    if archived_workspace:
+        print(f"Archived previous workspace without modification: {archived_workspace}")
     print(f"Selected {len(samples)} of {len(records)} records ({coverage_count} coverage selections).")
     print("Discovery samples are coverage-biased; use a separate random sample for prevalence estimates.")
     print(f"Review samples: {args.workspace / 'samples.json'}")
@@ -262,14 +323,26 @@ def run_split_labels(args: argparse.Namespace) -> int:
         train_fraction=args.train_fraction,
         dev_fraction=args.dev_fraction,
     )
+    artifacts = {}
     for name, records_for_split in splits.items():
-        _write_jsonl(args.out / f"{name}.jsonl", records_for_split)
+        artifact_path = args.out / f"{name}.jsonl"
+        _write_jsonl(artifact_path, records_for_split)
+        provenance_fields = sorted(
+            {field for record in records_for_split for field in record}
+        )
+        artifacts[name] = {
+            "path": artifact_path.name,
+            "record_count": len(records_for_split),
+            "provenance_fields": provenance_fields,
+            "records_sha256": _records_sha256(records_for_split, provenance_fields),
+        }
     manifest = {
         "schema_version": "1.0",
         "source": str(args.dataset),
         "label_column": args.label_column,
         "seed": args.seed,
         "counts": {name: len(items) for name, items in splits.items()},
+        "artifacts": artifacts,
         "policy": {
             "train": "Few-shot examples and prompt construction only",
             "dev": "Evaluator iteration and threshold selection",
@@ -286,6 +359,15 @@ def run_validate_judge(args: argparse.Namespace) -> int:
     if not 0 <= args.min_tpr <= 1 or not 0 <= args.min_tnr <= 1:
         raise ValueError("TPR and TNR thresholds must be between 0 and 1")
     records = _load_records(args.dataset)
+    provenance = (
+        _verify_test_split_provenance(
+            args.dataset, records, args.split_manifest, args.human_column
+        )
+        if args.split_manifest
+        else {"verified": False, "reason": "No split manifest supplied"}
+    )
+    if args.evaluator and not provenance["verified"]:
+        raise ValueError("--split-manifest is required before an evaluator can be marked validated")
     missing = [
         column
         for column in (args.human_column, args.judge_column)
@@ -328,7 +410,8 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         "schema_version": "1.0",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dataset": str(args.dataset),
-        "dataset_role": "held_out_test",
+        "dataset_role": "held_out_test" if provenance["verified"] else "unverified_dataset",
+        "provenance": provenance,
         "human_label_column": args.human_column,
         "evaluator_label_column": args.judge_column,
         "metrics": metrics,
@@ -338,7 +421,9 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         "groups": group_reports,
     }
     if args.evaluator:
-        evaluator = json.loads(args.evaluator.read_text(encoding="utf-8"))
+        evaluator = validate_evaluator_definition(
+            json.loads(args.evaluator.read_text(encoding="utf-8"))
+        )
         lifecycle = dict(evaluator.get("lifecycle_checkpoints") or {})
         if not lifecycle.get("obvious_errors_reviewed", False):
             gate_passed = False
@@ -467,7 +552,11 @@ def build_parser() -> argparse.ArgumentParser:
     discover_parser.add_argument("--reviewer", help="Principal domain expert name or stable identifier.")
     discover_parser.add_argument("--reviewer-role", help="Principal domain expert role.")
     discover_parser.add_argument("--seed", type=int, default=42, help="Deterministic sampling seed. Default: 42.")
-    discover_parser.add_argument("--force", action="store_true", help="Refresh core files in an existing workspace.")
+    discover_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Archive the complete existing workspace, then create a fresh workspace.",
+    )
     discover_parser.set_defaults(func=run_discover)
 
     promote_parser = subparsers.add_parser(
@@ -514,6 +603,11 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--seed", type=int, default=42)
     validate_parser.add_argument("--out", type=Path, help="Optional JSON validation report path.")
     validate_parser.add_argument("--evaluator", type=Path, help="Optional evaluator JSON whose status should be updated.")
+    validate_parser.add_argument(
+        "--split-manifest",
+        type=Path,
+        help="Manifest used to verify that the dataset is the untouched held-out test partition.",
+    )
     validate_parser.add_argument(
         "--group-by",
         nargs="+",

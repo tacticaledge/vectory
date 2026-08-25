@@ -1,4 +1,9 @@
 import json
+import sys
+from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
 import pytest
@@ -17,6 +22,7 @@ from components.eval_workflow import (
     split_labeled_records,
     summarize_coverage,
     validate_evaluator_labels,
+    validate_evaluator_definition,
 )
 
 
@@ -235,6 +241,36 @@ def test_labeled_splits_require_enough_examples_for_all_three_sets():
         )
 
 
+def test_labeled_splits_keep_every_partition_nonempty_at_extreme_valid_fractions():
+    records = [
+        {"id": index, "human_label": label}
+        for label in ("Pass", "Fail")
+        for index in range(3)
+    ]
+
+    splits = split_labeled_records(
+        records,
+        "human_label",
+        train_fraction=0.49,
+        dev_fraction=0.49,
+    )
+
+    assert {name: len(items) for name, items in splits.items()} == {
+        "train": 2,
+        "dev": 2,
+        "test": 2,
+    }
+    assert all({item["human_label"] for item in items} == {"Pass", "Fail"} for items in splits.values())
+
+
+def test_evaluator_definition_validation_rejects_shallow_imports():
+    with pytest.raises(ValueError, match="schema_version"):
+        validate_evaluator_definition(
+            {"kind": "llm_judge", "prompt": "{{evaluation_input}}"},
+            required_kind="llm_judge",
+        )
+
+
 def test_trace_normalization_preserves_order_and_details():
     segments = normalize_trace_segments(
         {
@@ -252,3 +288,7 @@ def test_trace_normalization_preserves_order_and_details():
     assert segments[1]["title"] == "search"
     assert segments[1]["details"] == {"arguments": {"q": "invoice"}}
     assert '"id": 12' in segments[2]["content"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

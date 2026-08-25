@@ -1,4 +1,11 @@
 import json
+import sys
+from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import pytest
 
 from vectory_cli.cli import main
 
@@ -50,13 +57,30 @@ def test_discover_and_promote_workflow(tmp_path):
     assert {example["result"] for example in evaluator["expert_examples"]} == {"Pass", "Fail"}
 
 
+def test_force_discover_archives_all_human_review_artifacts(tmp_path):
+    dataset = tmp_path / "traces.jsonl"
+    write_jsonl(dataset, [{"input": f"Q{index}", "output": f"A{index}"} for index in range(8)])
+    workspace = tmp_path / "review"
+    assert main(["discover", str(dataset), "--workspace", str(workspace)]) == 0
+    (workspace / "annotations.json").write_text('{"0":{"critique":"Keep me"}}', encoding="utf-8")
+    (workspace / "evaluators" / "stale.json").write_text('{"status":"validated"}', encoding="utf-8")
+
+    assert main(["discover", str(dataset), "--workspace", str(workspace), "--force"]) == 0
+
+    archives = list(tmp_path.glob("review.archive-*"))
+    assert len(archives) == 1
+    assert json.loads((archives[0] / "annotations.json").read_text(encoding="utf-8"))["0"]["critique"] == "Keep me"
+    assert (archives[0] / "evaluators" / "stale.json").is_file()
+    assert not (workspace / "evaluators" / "stale.json").exists()
+    assert json.loads((workspace / "annotations.json").read_text(encoding="utf-8")) == {}
+
+
 def test_split_and_validate_judge_gate(tmp_path):
     labels = tmp_path / "labels.jsonl"
     records = [
         {
             "id": index,
             "human_label": "Pass" if index % 2 == 0 else "Fail",
-            "judge_label": "Pass" if index % 2 == 0 else "Fail",
             "scenario": "common" if index % 4 < 2 else "edge",
         }
         for index in range(40)
@@ -70,16 +94,24 @@ def test_split_and_validate_judge_gate(tmp_path):
     manifest = json.loads((split_dir / "split_manifest.json").read_text(encoding="utf-8"))
     assert sum(manifest["counts"].values()) == 40
     assert all((split_dir / f"{name}.jsonl").is_file() for name in ("train", "dev", "test"))
+    test_records = [
+        json.loads(line) for line in (split_dir / "test.jsonl").read_text().splitlines()
+    ]
+    for record in test_records:
+        record["judge_label"] = record["human_label"]
+    write_jsonl(split_dir / "test.jsonl", test_records)
 
     report = tmp_path / "validation.json"
     assert main(
         [
             "validate-judge",
-            str(labels),
+            str(split_dir / "test.jsonl"),
             "--human-column",
             "human_label",
             "--judge-column",
             "judge_label",
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
             "--bootstrap-iterations",
             "100",
             "--out",
@@ -91,6 +123,8 @@ def test_split_and_validate_judge_gate(tmp_path):
     report_payload = json.loads(report.read_text(encoding="utf-8"))
     assert report_payload["gate_passed"] is True
     assert len(report_payload["groups"]) == 2
+    assert report_payload["dataset_role"] == "held_out_test"
+    assert report_payload["provenance"]["verified"] is True
 
 
 def test_validate_judge_fails_ci_when_one_class_is_missed(tmp_path):
@@ -117,3 +151,40 @@ def test_validate_judge_fails_ci_when_one_class_is_missed(tmp_path):
             "50",
         ]
     ) == 1
+
+
+def test_validate_judge_rejects_dataset_that_does_not_match_split_manifest(tmp_path):
+    labels = tmp_path / "labels.jsonl"
+    write_jsonl(
+        labels,
+        [
+            {"id": index, "human": label, "judge": label}
+            for label in ("Pass", "Fail")
+            for index in range(4)
+        ],
+    )
+    split_dir = tmp_path / "splits"
+    assert main(
+        ["split-labels", str(labels), "--label-column", "human", "--out", str(split_dir)]
+    ) == 0
+    test_records = [json.loads(line) for line in (split_dir / "test.jsonl").read_text().splitlines()]
+    test_records[0]["human"] = "Fail" if test_records[0]["human"] == "Pass" else "Pass"
+    write_jsonl(split_dir / "test.jsonl", test_records)
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "validate-judge",
+                str(split_dir / "test.jsonl"),
+                "--human-column",
+                "human",
+                "--judge-column",
+                "judge",
+                "--split-manifest",
+                str(split_dir / "split_manifest.json"),
+            ]
+        )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

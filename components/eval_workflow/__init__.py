@@ -6,7 +6,7 @@ from .discovery import (
     select_diverse_samples,
     summarize_coverage,
 )
-from .promotion import build_evaluator_definition
+from .promotion import build_evaluator_definition, validate_evaluator_definition
 from .trace_review import normalize_trace_segments
 from .validation import (
     bootstrap_metric_intervals,
@@ -15,6 +15,7 @@ from .validation import (
     validate_evaluator_labels,
 )
 from .workspace import (
+    archive_review_workspace,
     build_review_bundle,
     initialize_review_workspace,
     load_review_workspace,
@@ -25,6 +26,7 @@ from .workspace import (
 )
 
 __all__ = [
+    "archive_review_workspace",
     "bootstrap_metric_intervals",
     "build_evaluator_definition",
     "build_review_bundle",
@@ -42,4 +44,5 @@ __all__ = [
     "split_labeled_records",
     "summarize_coverage",
     "validate_evaluator_labels",
+    "validate_evaluator_definition",
 ]

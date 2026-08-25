@@ -126,6 +126,9 @@ def save_evaluator_definition(
     workspace: str | Path, evaluator: Mapping[str, Any]
 ) -> Path:
     """Persist an evaluator definition inside a review workspace."""
+    from .promotion import validate_evaluator_definition
+
+    evaluator = validate_evaluator_definition(evaluator)
     evaluator_id = str(evaluator.get("evaluator_id") or "").strip()
     if not evaluator_id or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789-" for char in evaluator_id):
         raise ValueError("Evaluator definition must have a safe evaluator_id")
@@ -135,6 +138,17 @@ def save_evaluator_definition(
     target = root / "evaluators" / f"{evaluator_id}.json"
     _atomic_write_json(target, dict(evaluator))
     return target
+
+
+def archive_review_workspace(path: str | Path) -> Path:
+    """Atomically archive an existing workspace before a discovery refresh."""
+    root = Path(path)
+    if not (root / "manifest.json").is_file():
+        raise ValueError(f"Not a Vectory review workspace: {root}")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    archive = root.with_name(f"{root.name}.archive-{timestamp}")
+    root.replace(archive)
+    return archive
 
 
 def initialize_review_workspace(
