@@ -25,7 +25,7 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
 4. If trusted labels exist, create disjoint sets:
 
-   `vectory split-labels LABELS --label-column HUMAN_LABEL --out SPLITS`
+   `vectory split-labels LABELS --label-column HUMAN_LABEL --judge-column JUDGE_LABEL --out SPLITS`
 
    Use train only for examples or prompt construction, dev for iteration, and test once for final validation.
 

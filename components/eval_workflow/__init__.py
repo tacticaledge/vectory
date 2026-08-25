@@ -7,6 +7,12 @@ from .discovery import (
     summarize_coverage,
 )
 from .promotion import build_evaluator_definition, validate_evaluator_definition
+from .schemas import (
+    EvaluatorDefinition,
+    JudgeValidationReport,
+    dump_evaluator_definition,
+    parse_evaluator_definition,
+)
 from .trace_review import normalize_trace_segments
 from .validation import (
     bootstrap_metric_intervals,
@@ -26,16 +32,20 @@ from .workspace import (
 )
 
 __all__ = [
+    "EvaluatorDefinition",
+    "JudgeValidationReport",
     "archive_review_workspace",
     "bootstrap_metric_intervals",
     "build_evaluator_definition",
     "build_review_bundle",
     "dataframe_to_records",
+    "dump_evaluator_definition",
     "find_related_records",
     "initialize_review_workspace",
     "load_review_workspace",
     "normalize_binary_label",
     "normalize_trace_segments",
+    "parse_evaluator_definition",
     "save_evaluator_definition",
     "save_json_artifact",
     "save_jsonl_records",
@@ -43,6 +53,6 @@ __all__ = [
     "select_diverse_samples",
     "split_labeled_records",
     "summarize_coverage",
-    "validate_evaluator_labels",
     "validate_evaluator_definition",
+    "validate_evaluator_labels",
 ]

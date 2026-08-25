@@ -91,7 +91,16 @@ def test_split_and_validate_judge_gate(tmp_path):
     split_dir = tmp_path / "splits"
 
     assert main(
-        ["split-labels", str(labels), "--label-column", "human_label", "--out", str(split_dir)]
+        [
+            "split-labels",
+            str(labels),
+            "--label-column",
+            "human_label",
+            "--judge-column",
+            "judge_label",
+            "--out",
+            str(split_dir),
+        ]
     ) == 0
     manifest = json.loads((split_dir / "split_manifest.json").read_text(encoding="utf-8"))
     assert sum(manifest["counts"].values()) == 40
@@ -143,7 +152,16 @@ def test_validate_judge_fails_ci_when_one_class_is_missed(tmp_path):
     )
     split_dir = tmp_path / "splits"
     assert main(
-        ["split-labels", str(labels), "--label-column", "human", "--out", str(split_dir)]
+        [
+            "split-labels",
+            str(labels),
+            "--label-column",
+            "human",
+            "--judge-column",
+            "judge",
+            "--out",
+            str(split_dir),
+        ]
     ) == 0
 
     assert main(
@@ -162,6 +180,50 @@ def test_validate_judge_fails_ci_when_one_class_is_missed(tmp_path):
     ) == 1
 
 
+def test_validate_judge_rejects_a_different_prediction_field(tmp_path):
+    labels = tmp_path / "labels.jsonl"
+    write_jsonl(
+        labels,
+        [
+            {
+                "id": index,
+                "human": label,
+                "judge": label,
+                "untrusted_original_field": label,
+            }
+            for label in ("Pass", "Fail")
+            for index in range(4)
+        ],
+    )
+    split_dir = tmp_path / "splits"
+    assert main(
+        [
+            "split-labels",
+            str(labels),
+            "--label-column",
+            "human",
+            "--judge-column",
+            "judge",
+            "--out",
+            str(split_dir),
+        ]
+    ) == 0
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "validate-judge",
+                str(split_dir / "test.jsonl"),
+                "--human-column",
+                "human",
+                "--judge-column",
+                "untrusted_original_field",
+                "--split-manifest",
+                str(split_dir / "split_manifest.json"),
+            ]
+        )
+
+
 def test_validate_judge_rejects_dataset_that_does_not_match_split_manifest(tmp_path):
     labels = tmp_path / "labels.jsonl"
     write_jsonl(
@@ -174,7 +236,16 @@ def test_validate_judge_rejects_dataset_that_does_not_match_split_manifest(tmp_p
     )
     split_dir = tmp_path / "splits"
     assert main(
-        ["split-labels", str(labels), "--label-column", "human", "--out", str(split_dir)]
+        [
+            "split-labels",
+            str(labels),
+            "--label-column",
+            "human",
+            "--judge-column",
+            "judge",
+            "--out",
+            str(split_dir),
+        ]
     ) == 0
     test_records = [json.loads(line) for line in (split_dir / "test.jsonl").read_text().splitlines()]
     test_records[0]["human"] = "Fail" if test_records[0]["human"] == "Pass" else "Pass"
@@ -224,7 +295,16 @@ def test_validate_judge_requires_all_human_lifecycle_checkpoints(tmp_path):
     )
     split_dir = tmp_path / "splits"
     assert main(
-        ["split-labels", str(labels), "--label-column", "human", "--out", str(split_dir)]
+        [
+            "split-labels",
+            str(labels),
+            "--label-column",
+            "human",
+            "--judge-column",
+            "judge",
+            "--out",
+            str(split_dir),
+        ]
     ) == 0
     evaluator_path = tmp_path / "evaluator.json"
     evaluator_path.write_text(

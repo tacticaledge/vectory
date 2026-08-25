@@ -1,7 +1,7 @@
 """Route users to the right Vectory evaluation workflow."""
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import streamlit as st
 
@@ -9,7 +9,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from components.models import init_session_state
 from components.ui import inject_custom_css, section_header
-
 
 st.set_page_config(
     page_title="Start | Vectory",
@@ -87,7 +86,8 @@ elif goal == "Build or validate an evaluator":
         target_page = "pages/8_🔍_Error_Analysis.py"
         button_label = "Inspect Evaluators"
         st.code(
-            "vectory split-labels labels.jsonl --label-column human_label --out eval-splits\n"
+            "vectory split-labels labels.jsonl --label-column human_label "
+            "--judge-column judge_label --out eval-splits\n"
             "vectory validate-judge eval-splits/test.jsonl --human-column human_label "
             "--judge-column judge_label --split-manifest eval-splits/split_manifest.json "
             "--out validation.json",

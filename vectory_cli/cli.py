@@ -14,19 +14,21 @@ from importlib import resources
 from pathlib import Path
 
 from components.eval_workflow import (
+    JudgeValidationReport,
     archive_review_workspace,
     bootstrap_metric_intervals,
     build_evaluator_definition,
     dataframe_to_records,
+    dump_evaluator_definition,
     initialize_review_workspace,
     load_review_workspace,
+    parse_evaluator_definition,
     save_evaluator_definition,
     save_json_artifact,
     save_jsonl_records,
     select_diverse_samples,
     split_labeled_records,
     validate_evaluator_labels,
-    validate_evaluator_definition,
 )
 
 from . import __version__
@@ -149,7 +151,7 @@ def _load_records(path: Path) -> list[dict]:
 
 def _write_json(path: Path, payload: object) -> None:
     if not isinstance(payload, dict):
-        raise ValueError("JSON artifacts must be objects")
+        raise TypeError("JSON artifacts must be objects")
     save_json_artifact(path, payload)
 
 
@@ -184,9 +186,13 @@ def _verify_test_split_provenance(
         raise ValueError(
             "Human label column does not match the trusted label column in the split manifest"
         )
+    if manifest.get("judge_label_column") != judge_label_column:
+        raise ValueError(
+            "Judge label column does not match the prediction field designated by the split manifest"
+        )
     test_artifact = (manifest.get("artifacts") or {}).get("test")
     if not isinstance(test_artifact, dict):
-        raise ValueError("Split manifest does not contain test artifact provenance")
+        raise TypeError("Split manifest does not contain test artifact provenance")
     fields = test_artifact.get("provenance_fields")
     field_hashes = test_artifact.get("field_sha256")
     expected_count = test_artifact.get("record_count")
@@ -201,7 +207,10 @@ def _verify_test_split_provenance(
         or not isinstance(expected_count, int)
     ):
         raise ValueError("Split manifest test provenance is incomplete")
-    verified_fields = [field for field in fields if field != judge_label_column]
+    mutable_fields = test_artifact.get("mutable_fields")
+    if mutable_fields != [judge_label_column]:
+        raise ValueError("Split manifest must designate exactly one mutable judge prediction field")
+    verified_fields = [field for field in fields if field not in mutable_fields]
     fields_match = all(
         field_hashes.get(field) == _records_sha256(records, [field])
         for field in verified_fields
@@ -353,11 +362,13 @@ def run_split_labels(args: argparse.Namespace) -> int:
                 field: _records_sha256(records_for_split, [field])
                 for field in provenance_fields
             },
+            "mutable_fields": [args.judge_column],
         }
     manifest = {
         "schema_version": "1.0",
         "source": str(args.dataset),
         "label_column": args.label_column,
+        "judge_label_column": args.judge_column,
         "seed": args.seed,
         "counts": {name: len(items) for name, items in splits.items()},
         "artifacts": artifacts,
@@ -438,11 +449,12 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         "gate_passed": gate_passed,
         "groups": group_reports,
     }
+    evaluator = None
     if args.evaluator:
-        evaluator = validate_evaluator_definition(
+        evaluator = parse_evaluator_definition(
             json.loads(args.evaluator.read_text(encoding="utf-8"))
         )
-        lifecycle = dict(evaluator.get("lifecycle_checkpoints") or {})
+        lifecycle = evaluator.lifecycle_checkpoints
         checkpoint_labels = {
             "human_review_completed": "human review is incomplete",
             "obvious_errors_reviewed": "obvious product errors were not reviewed",
@@ -453,25 +465,23 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         incomplete_checkpoints = [
             message
             for checkpoint, message in checkpoint_labels.items()
-            if lifecycle.get(checkpoint) is not True
+            if getattr(lifecycle, checkpoint) is not True
         ]
         if incomplete_checkpoints:
             gate_passed = False
             report["gate_passed"] = False
             report["gate_blockers"] = incomplete_checkpoints
-        evaluator["status"] = "validated" if gate_passed else "validation_failed"
-        validation_history = list((evaluator.get("validation") or {}).get("history") or [])
-        validation_history.append(report)
-        evaluator["validation"] = {
-            **dict(evaluator.get("validation") or {}),
-            "validated": gate_passed,
-            "last_report": report,
-            "history": validation_history,
-        }
-        _write_json(args.evaluator, evaluator)
+
+    typed_report = JudgeValidationReport.model_validate(report)
+    if evaluator is not None:
+        evaluator.status = "validated" if gate_passed else "validation_failed"
+        evaluator.validation.validated = gate_passed
+        evaluator.validation.last_report = typed_report
+        evaluator.validation.history.append(typed_report)
+        _write_json(args.evaluator, dump_evaluator_definition(evaluator))
         print(f"Updated evaluator status: {args.evaluator}")
     if args.out:
-        _write_json(args.out, report)
+        _write_json(args.out, typed_report.model_dump(mode="json", by_alias=True))
         print(f"Wrote validation report: {args.out}")
     print(
         "Judge validation: "
@@ -613,6 +623,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     split_parser.add_argument("dataset", type=Path, help="JSON, JSONL, or CSV with trusted human labels.")
     split_parser.add_argument("--label-column", required=True, help="Binary Pass/Fail human-label column.")
+    split_parser.add_argument(
+        "--judge-column",
+        required=True,
+        help="Prediction column that may be added or replaced after splitting.",
+    )
     split_parser.add_argument("--out", type=Path, required=True, help="Output directory for split JSONL files.")
     split_parser.add_argument("--train-fraction", type=float, default=0.15)
     split_parser.add_argument("--dev-fraction", type=float, default=0.45)
@@ -660,7 +675,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         return int(args.func(args))
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
         parser.error(str(error))
         return 2
 

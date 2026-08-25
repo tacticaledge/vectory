@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from components.eval_workflow import (
+    EvaluatorDefinition,
     bootstrap_metric_intervals,
     build_evaluator_definition,
     build_review_bundle,
@@ -17,12 +18,13 @@ from components.eval_workflow import (
     initialize_review_workspace,
     load_review_workspace,
     normalize_trace_segments,
+    parse_evaluator_definition,
     save_evaluator_definition,
     select_diverse_samples,
     split_labeled_records,
     summarize_coverage,
-    validate_evaluator_labels,
     validate_evaluator_definition,
+    validate_evaluator_labels,
 )
 
 
@@ -269,6 +271,20 @@ def test_evaluator_definition_validation_rejects_shallow_imports():
             {"kind": "llm_judge", "prompt": "{{evaluation_input}}"},
             required_kind="llm_judge",
         )
+
+
+def test_evaluator_definition_uses_a_strict_typed_contract():
+    evaluator = build_evaluator_definition(
+        "Unsupported claim",
+        {"description": "The output contains an unsupported claim."},
+    )
+
+    parsed = parse_evaluator_definition(evaluator)
+
+    assert isinstance(parsed, EvaluatorDefinition)
+    evaluator["validation"]["unexpected"] = True
+    with pytest.raises(ValueError, match="unexpected"):
+        parse_evaluator_definition(evaluator)
 
 
 def test_trace_normalization_preserves_order_and_details():

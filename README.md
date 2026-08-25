@@ -48,7 +48,10 @@ After expert review and taxonomy acceptance, promote and validate a focused eval
 
 ```bash
 vectory promote eval-review "Unsupported claim" --errors-reviewed
-vectory split-labels judge-labels.jsonl --label-column human_label --out judge-splits
+vectory split-labels judge-labels.jsonl \
+  --label-column human_label \
+  --judge-column judge_label \
+  --out judge-splits
 vectory validate-judge judge-splits/test.jsonl \
   --human-column human_label \
   --judge-column judge_label \

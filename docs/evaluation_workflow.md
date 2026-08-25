@@ -91,6 +91,7 @@ Trusted labels must contain at least three Pass and three Fail examples:
 ```bash
 vectory split-labels judge-labels.jsonl \
   --label-column human_label \
+  --judge-column judge_label \
   --out judge-splits
 ```
 
@@ -112,7 +113,7 @@ vectory validate-judge judge-splits/test.jsonl \
   --evaluator eval-review/evaluators/failure-unsupported-claim.json
 ```
 
-The split manifest fingerprints every original test field independently. You may add or replace the declared judge prediction column after splitting; Vectory excludes only that output column while verifying that labels, inputs, metadata, ordering, and record count still match the untouched test partition. The report includes this provenance, the confusion matrix, balanced accuracy, per-class precision/recall/F1, bootstrap intervals, product-dimension slices, thresholds, and gate result. Updating an evaluator requires verified split provenance and appends the report to its validation history. The command exits nonzero when provenance fails, the gate fails, either class is absent, or the evaluator's fix-review checkpoint is incomplete.
+The split manifest fingerprints every original test field independently and designates the judge prediction column at split time. You may add or replace that one declared output column after splitting; Vectory verifies that labels, inputs, metadata, ordering, and record count still match the untouched test partition, and rejects a validator that names a different mutable field. The report includes this provenance, the confusion matrix, balanced accuracy, per-class precision/recall/F1, bootstrap intervals, product-dimension slices, thresholds, and gate result. Updating an evaluator requires verified split provenance and appends the report to its validation history. The command exits nonzero when provenance fails, the gate fails, either class is absent, or the evaluator's fix-review checkpoint is incomplete.
 
 Raw agreement alone can be misleading on imbalanced data. Inspect false passes in particular: these are human failures that the automated judge allowed through.
 
@@ -132,6 +133,10 @@ Use both when releasing agents: validated binary judges cover learned domain exp
 ## Agent workflow
 
 The repository includes `.agents/skills/vectory-evals`. Codex can discover this project skill automatically from a source checkout and use it to route trace-review, evaluator-promotion, validation, and audit requests. The skill preserves the same human-review and held-out-validation constraints as the app and CLI.
+
+## Public dependency boundary
+
+Vectory is a public MIT-licensed package. Tactical Edge's shared `commons-python` repository is private, so it cannot be a runtime or test dependency of this project. The packaged `components.agentic.Bot`, typed provider settings, and `tests.utils` helper are intentional public-repository adapters for the small interfaces Vectory needs. Keep these adapters narrow; move them to a shared package only when that package is publicly installable and versioned for external consumers.
 
 ## Design sources
 
