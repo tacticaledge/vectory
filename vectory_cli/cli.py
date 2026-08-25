@@ -413,11 +413,26 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         iterations=args.bootstrap_iterations,
         seed=args.seed,
     )
+    evaluator = (
+        parse_evaluator_definition(
+            json.loads(args.evaluator.read_text(encoding="utf-8"))
+        )
+        if args.evaluator
+        else None
+    )
+    evaluator_min_tpr = (
+        evaluator.validation.minimum_tpr if evaluator is not None else None
+    )
+    evaluator_min_tnr = (
+        evaluator.validation.minimum_tnr if evaluator is not None else None
+    )
+    effective_min_tpr = max(args.min_tpr, evaluator_min_tpr or 0.0)
+    effective_min_tnr = max(args.min_tnr, evaluator_min_tnr or 0.0)
     gate_passed = (
         metrics["tpr"] is not None
         and metrics["tnr"] is not None
-        and metrics["tpr"] >= args.min_tpr
-        and metrics["tnr"] >= args.min_tnr
+        and metrics["tpr"] >= effective_min_tpr
+        and metrics["tnr"] >= effective_min_tnr
     )
     group_reports = []
     if args.group_by:
@@ -445,15 +460,18 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         "evaluator_label_column": args.judge_column,
         "metrics": metrics,
         "confidence_intervals_95": intervals,
-        "thresholds": {"minimum_tpr": args.min_tpr, "minimum_tnr": args.min_tnr},
+        "thresholds": {
+            "minimum_tpr": effective_min_tpr,
+            "minimum_tnr": effective_min_tnr,
+            "cli_minimum_tpr": args.min_tpr,
+            "cli_minimum_tnr": args.min_tnr,
+            "evaluator_minimum_tpr": evaluator_min_tpr,
+            "evaluator_minimum_tnr": evaluator_min_tnr,
+        },
         "gate_passed": gate_passed,
         "groups": group_reports,
     }
-    evaluator = None
-    if args.evaluator:
-        evaluator = parse_evaluator_definition(
-            json.loads(args.evaluator.read_text(encoding="utf-8"))
-        )
+    if evaluator is not None:
         lifecycle = evaluator.lifecycle_checkpoints
         checkpoint_labels = {
             "human_review_completed": "human review is incomplete",
@@ -642,8 +660,18 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("dataset", type=Path, help="Held-out JSON, JSONL, or CSV test set.")
     validate_parser.add_argument("--human-column", required=True, help="Trusted human Pass/Fail label column.")
     validate_parser.add_argument("--judge-column", required=True, help="Evaluator Pass/Fail label column.")
-    validate_parser.add_argument("--min-tpr", type=float, default=0.8, help="Minimum true-pass rate. Default: 0.8.")
-    validate_parser.add_argument("--min-tnr", type=float, default=0.8, help="Minimum true-fail rate. Default: 0.8.")
+    validate_parser.add_argument(
+        "--min-tpr",
+        type=float,
+        default=0.8,
+        help="Minimum true-pass rate baseline. Evaluator contracts may require more. Default: 0.8.",
+    )
+    validate_parser.add_argument(
+        "--min-tnr",
+        type=float,
+        default=0.8,
+        help="Minimum true-fail rate baseline. Evaluator contracts may require more. Default: 0.8.",
+    )
     validate_parser.add_argument("--bootstrap-iterations", type=int, default=2000)
     validate_parser.add_argument("--seed", type=int, default=42)
     validate_parser.add_argument("--out", type=Path, help="Optional JSON validation report path.")

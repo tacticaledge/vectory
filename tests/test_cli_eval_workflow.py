@@ -347,6 +347,86 @@ def test_validate_judge_requires_all_human_lifecycle_checkpoints(tmp_path):
     assert evaluator["validation"]["validated"] is False
 
 
+def test_validate_judge_enforces_stricter_evaluator_thresholds(tmp_path):
+    labels = tmp_path / "labels.jsonl"
+    write_jsonl(
+        labels,
+        [
+            {"id": f"{label}-{index}", "human": label, "judge": label}
+            for label in ("Pass", "Fail")
+            for index in range(20)
+        ],
+    )
+    split_dir = tmp_path / "splits"
+    assert main(
+        [
+            "split-labels",
+            str(labels),
+            "--label-column",
+            "human",
+            "--judge-column",
+            "judge",
+            "--out",
+            str(split_dir),
+        ]
+    ) == 0
+    test_records = [
+        json.loads(line) for line in (split_dir / "test.jsonl").read_text().splitlines()
+    ]
+    first_pass = next(record for record in test_records if record["human"] == "Pass")
+    first_pass["judge"] = "Fail"
+    write_jsonl(split_dir / "test.jsonl", test_records)
+
+    evaluator = build_evaluator_definition(
+        "Unsupported claim",
+        {"description": "The output contains an unsupported claim."},
+        source_annotation_ids=["pass", "fail"],
+        expert_examples=[
+            {"input": {"output": "Grounded"}, "critique": "Grounded answer.", "result": "Pass"},
+            {"input": {"output": "Invented"}, "critique": "Unsupported claim.", "result": "Fail"},
+        ],
+        errors_reviewed=True,
+    )
+    evaluator["validation"]["minimum_tpr"] = 0.95
+    evaluator["validation"]["minimum_tnr"] = 0.90
+    evaluator_path = tmp_path / "evaluator.json"
+    evaluator_path.write_text(json.dumps(evaluator), encoding="utf-8")
+    report_path = tmp_path / "report.json"
+
+    assert main(
+        [
+            "validate-judge",
+            str(split_dir / "test.jsonl"),
+            "--human-column",
+            "human",
+            "--judge-column",
+            "judge",
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
+            "--evaluator",
+            str(evaluator_path),
+            "--out",
+            str(report_path),
+            "--bootstrap-iterations",
+            "50",
+        ]
+    ) == 1
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    updated_evaluator = json.loads(evaluator_path.read_text(encoding="utf-8"))
+    assert report["metrics"]["tpr"] == 0.875
+    assert report["thresholds"] == {
+        "minimum_tpr": 0.95,
+        "minimum_tnr": 0.90,
+        "cli_minimum_tpr": 0.8,
+        "cli_minimum_tnr": 0.8,
+        "evaluator_minimum_tpr": 0.95,
+        "evaluator_minimum_tnr": 0.90,
+    }
+    assert report["gate_passed"] is False
+    assert updated_evaluator["status"] == "validation_failed"
+
+
 if __name__ == "__main__":
     from tests.utils import pytest_this_file
 

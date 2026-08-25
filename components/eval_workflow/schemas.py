@@ -117,6 +117,10 @@ class ConfidenceIntervals(StrictModel):
 class ValidationThresholds(StrictModel):
     minimum_tpr: float = Field(ge=0, le=1)
     minimum_tnr: float = Field(ge=0, le=1)
+    cli_minimum_tpr: float = Field(ge=0, le=1)
+    cli_minimum_tnr: float = Field(ge=0, le=1)
+    evaluator_minimum_tpr: float | None = Field(default=None, ge=0, le=1)
+    evaluator_minimum_tnr: float | None = Field(default=None, ge=0, le=1)
 
 
 class SplitProvenance(StrictModel):
