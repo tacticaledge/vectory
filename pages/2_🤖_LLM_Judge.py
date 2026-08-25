@@ -28,7 +28,12 @@ def get_api_key(provider: str) -> str:
 
 from components.models import init_session_state, ColumnMapping, DataSourceType
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_ids, get_model_label
-from components.evaluators.llm_judge import LLMJudgeEvaluator, estimate_cost, CRITERIA_TEMPLATES
+from components.evaluators.llm_judge import (
+    CRITERIA_TEMPLATES,
+    LLMJudgeEvaluator,
+    estimate_cost,
+    get_result_column,
+)
 from components.eval_workflow import validate_evaluator_definition
 from components.provider_config import get_provider_api_key
 from components.ui import (
@@ -551,8 +556,8 @@ Note: This evaluation is based on image metadata. For full visual analysis, visi
             display_cols = [c for c in [mapping_dict["input"], mapping_dict["expected"], mapping_dict["output"]] if c]
             display_df = eval_df[display_cols].reset_index(drop=True).copy()
             if decision_mode == "binary":
-                display_df["Verdict"] = results["verdict"].values
-                display_df["Critique"] = results["reasoning"].values
+                display_df["Verdict"] = get_result_column(results, "verdict").values
+                display_df["Critique"] = get_result_column(results, "reasoning").values
             else:
                 display_df["Score"] = results["score"].values
                 display_df["Reasoning"] = results["reasoning"].values

@@ -5,8 +5,9 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
+import pandas as pd
 
-from components.evaluators.llm_judge import LLMJudgeEvaluator
+from components.evaluators.llm_judge import LLMJudgeEvaluator, get_result_column
 
 
 def make_evaluator(decision_mode="binary"):
@@ -100,6 +101,17 @@ def test_custom_prompt_preserves_json_examples_while_replacing_known_placeholder
     assert '{"result": "Pass"}' in prompt
     assert "Input: Actual input" in prompt
     assert "Output: Actual output" in prompt
+
+
+def test_all_error_batch_has_safe_empty_verdict_column():
+    results = pd.DataFrame(
+        [{"score": None, "reasoning": None, "error": "invalid output"}]
+    )
+
+    verdicts = get_result_column(results, "verdict")
+
+    assert len(verdicts) == 1
+    assert verdicts.isna().all()
 
 
 if __name__ == "__main__":

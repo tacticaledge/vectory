@@ -61,6 +61,13 @@ CRITERIA_TEMPLATES = {
 }
 
 
+def get_result_column(results, name: str):
+    """Return a result column aligned to the batch, including all-error batches."""
+    import pandas as pd
+
+    return results.get(name, pd.Series(None, index=results.index, dtype=object))
+
+
 class BinaryJudgeResponse(BaseModel):
     """Strict response contract for release-relevant binary judge decisions."""
 

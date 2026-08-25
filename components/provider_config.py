@@ -2,25 +2,17 @@
 
 from __future__ import annotations
 
-import os
-from collections.abc import Mapping
-
-from pydantic import BaseModel, SecretStr
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class ProviderSettings(BaseModel):
+class ProviderSettings(BaseSettings):
     """Provider API keys loaded and validated at one environment boundary."""
+
+    model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
     openai_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
-
-    @classmethod
-    def from_environment(cls, environ: Mapping[str, str] | None = None) -> "ProviderSettings":
-        source = os.environ if environ is None else environ
-        return cls(
-            openai_api_key=source.get("OPENAI_API_KEY") or None,
-            anthropic_api_key=source.get("ANTHROPIC_API_KEY") or None,
-        )
 
     def api_key(self, provider: str) -> str:
         field_by_provider = {
@@ -33,4 +25,4 @@ class ProviderSettings(BaseModel):
 
 def get_provider_api_key(provider: str) -> str:
     """Return one provider key from the typed environment settings."""
-    return ProviderSettings.from_environment().api_key(provider)
+    return ProviderSettings().api_key(provider)

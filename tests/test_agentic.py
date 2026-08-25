@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from components.agentic import Bot
 
 
@@ -31,3 +37,9 @@ def test_openai_bot_applies_strict_response_schema():
     assert response_format["type"] == "json_schema"
     assert response_format["json_schema"]["strict"] is True
     assert response_format["json_schema"]["schema"] == schema
+
+
+if __name__ == "__main__":
+    from tests.utils import pytest_this_file
+
+    raise SystemExit(pytest_this_file(__file__))
