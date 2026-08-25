@@ -171,7 +171,11 @@ def _records_sha256(records: list[dict], fields: list[str] | None = None) -> str
 
 
 def _verify_test_split_provenance(
-    dataset: Path, records: list[dict], manifest_path: Path, human_label_column: str
+    dataset: Path,
+    records: list[dict],
+    manifest_path: Path,
+    human_label_column: str,
+    judge_label_column: str,
 ) -> dict[str, object]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != "1.0":
@@ -184,16 +188,25 @@ def _verify_test_split_provenance(
     if not isinstance(test_artifact, dict):
         raise ValueError("Split manifest does not contain test artifact provenance")
     fields = test_artifact.get("provenance_fields")
-    expected_hash = test_artifact.get("records_sha256")
+    field_hashes = test_artifact.get("field_sha256")
     expected_count = test_artifact.get("record_count")
     if (
         not isinstance(fields, list)
         or not all(isinstance(field, str) for field in fields)
-        or not isinstance(expected_hash, str)
+        or not isinstance(field_hashes, dict)
+        or not all(
+            isinstance(field, str) and isinstance(digest, str)
+            for field, digest in field_hashes.items()
+        )
         or not isinstance(expected_count, int)
     ):
         raise ValueError("Split manifest test provenance is incomplete")
-    if len(records) != expected_count or _records_sha256(records, fields) != expected_hash:
+    verified_fields = [field for field in fields if field != judge_label_column]
+    fields_match = all(
+        field_hashes.get(field) == _records_sha256(records, [field])
+        for field in verified_fields
+    )
+    if len(records) != expected_count or not fields_match:
         raise ValueError(
             "Validation dataset does not match the untouched test partition in the split manifest"
         )
@@ -201,7 +214,8 @@ def _verify_test_split_provenance(
         "verified": True,
         "split_manifest": str(manifest_path),
         "test_artifact": str(dataset),
-        "records_sha256": expected_hash,
+        "verified_fields": verified_fields,
+        "excluded_prediction_field": judge_label_column,
         "record_count": expected_count,
     }
 
@@ -335,6 +349,10 @@ def run_split_labels(args: argparse.Namespace) -> int:
             "record_count": len(records_for_split),
             "provenance_fields": provenance_fields,
             "records_sha256": _records_sha256(records_for_split, provenance_fields),
+            "field_sha256": {
+                field: _records_sha256(records_for_split, [field])
+                for field in provenance_fields
+            },
         }
     manifest = {
         "schema_version": "1.0",
@@ -358,9 +376,15 @@ def run_split_labels(args: argparse.Namespace) -> int:
 def run_validate_judge(args: argparse.Namespace) -> int:
     if not 0 <= args.min_tpr <= 1 or not 0 <= args.min_tnr <= 1:
         raise ValueError("TPR and TNR thresholds must be between 0 and 1")
+    if args.human_column == args.judge_column:
+        raise ValueError("Human and judge label columns must be different")
     records = _load_records(args.dataset)
     provenance = _verify_test_split_provenance(
-        args.dataset, records, args.split_manifest, args.human_column
+        args.dataset,
+        records,
+        args.split_manifest,
+        args.human_column,
+        args.judge_column,
     )
     missing = [
         column

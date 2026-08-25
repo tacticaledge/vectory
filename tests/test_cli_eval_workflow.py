@@ -82,6 +82,7 @@ def test_split_and_validate_judge_gate(tmp_path):
         {
             "id": index,
             "human_label": "Pass" if index % 2 == 0 else "Fail",
+            "judge_label": "preliminary",
             "scenario": "common" if index % 4 < 2 else "edge",
         }
         for index in range(40)
@@ -126,6 +127,8 @@ def test_split_and_validate_judge_gate(tmp_path):
     assert len(report_payload["groups"]) == 2
     assert report_payload["dataset_role"] == "held_out_test"
     assert report_payload["provenance"]["verified"] is True
+    assert report_payload["provenance"]["excluded_prediction_field"] == "judge_label"
+    assert "judge_label" not in report_payload["provenance"]["verified_fields"]
 
 
 def test_validate_judge_fails_ci_when_one_class_is_missed(tmp_path):

@@ -112,7 +112,7 @@ vectory validate-judge judge-splits/test.jsonl \
   --evaluator eval-review/evaluators/failure-unsupported-claim.json
 ```
 
-The split manifest fingerprints every original test record. You may add the judge prediction column after splitting; Vectory verifies that all original fields still match the untouched test partition. The report includes this provenance, the confusion matrix, balanced accuracy, per-class precision/recall/F1, bootstrap intervals, product-dimension slices, thresholds, and gate result. Updating an evaluator requires verified split provenance and appends the report to its validation history. The command exits nonzero when provenance fails, the gate fails, either class is absent, or the evaluator's fix-review checkpoint is incomplete.
+The split manifest fingerprints every original test field independently. You may add or replace the declared judge prediction column after splitting; Vectory excludes only that output column while verifying that labels, inputs, metadata, ordering, and record count still match the untouched test partition. The report includes this provenance, the confusion matrix, balanced accuracy, per-class precision/recall/F1, bootstrap intervals, product-dimension slices, thresholds, and gate result. Updating an evaluator requires verified split provenance and appends the report to its validation history. The command exits nonzero when provenance fails, the gate fails, either class is absent, or the evaluator's fix-review checkpoint is incomplete.
 
 Raw agreement alone can be misleading on imbalanced data. Inspect false passes in particular: these are human failures that the automated judge allowed through.
 
