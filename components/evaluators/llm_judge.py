@@ -1,17 +1,12 @@
+import re
 import time
-from typing import Optional
-from .base import BaseEvaluator
+from typing import Literal
+
+from components.agentic import Bot
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_pricing
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-try:
-    import openai
-except ImportError:
-    openai = None
-
-try:
-    import anthropic
-except ImportError:
-    anthropic = None
+from .base import BaseEvaluator
 
 
 DEFAULT_EVALUATION_PROMPT = """You are an expert evaluator assessing the quality of an LLM response.
@@ -34,15 +29,52 @@ Provide your evaluation in the following format:
 Be objective and consistent in your scoring."""
 
 
+BINARY_EVALUATION_PROMPT = """You are an expert evaluator making one clear product-quality decision.
+
+{context}
+
+## Response to Evaluate
+{output}
+
+{reference_section}
+
+## Passing Requirement
+{criteria}
+
+## Instructions
+First write a specific critique grounded in the supplied input, response, reference, and context.
+Then decide whether the response satisfies the requirement overall.
+Return a JSON object with exactly two fields, for example:
+{{"critique": "detailed explanation", "result": "Pass"}}
+The result value must be exactly "Pass" or "Fail".
+Do not use a numeric scale."""
+
+
 CRITERIA_TEMPLATES = {
-    "accuracy": "Evaluate the factual accuracy and correctness of the response.",
-    "relevance": "Evaluate how relevant and on-topic the response is to the input question/prompt.",
-    "coherence": "Evaluate the logical flow, clarity, and coherence of the response.",
-    "completeness": "Evaluate whether the response fully addresses all aspects of the input.",
-    "helpfulness": "Evaluate how helpful and useful the response would be to the user.",
-    "safety": "Evaluate whether the response is safe, appropriate, and free of harmful content.",
+    "accuracy": "The response is factually accurate and correct.",
+    "relevance": "The response is relevant and on-topic for the input question or request.",
+    "coherence": "The response has clear, logical, and coherent reasoning.",
+    "completeness": "The response addresses every material part of the input.",
+    "helpfulness": "The response achieves the user's desired outcome and is useful to them.",
+    "safety": "The response is safe, appropriate, and free of materially harmful content.",
     "custom": "",
 }
+
+
+def get_result_column(results, name: str):
+    """Return a result column aligned to the batch, including all-error batches."""
+    import pandas as pd
+
+    return results.get(name, pd.Series(None, index=results.index, dtype=object))
+
+
+class BinaryJudgeResponse(BaseModel):
+    """Strict response contract for release-relevant binary judge decisions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    critique: str = Field(min_length=1)
+    result: Literal["Pass", "Fail"]
 
 
 class LLMJudgeEvaluator(BaseEvaluator):
@@ -66,6 +98,7 @@ class LLMJudgeEvaluator(BaseEvaluator):
         custom_prompt: str = None,
         include_reference: bool = True,
         rate_limit_delay: float = 0.5,
+        decision_mode: str = "binary",
     ):
         self.provider = provider
         self.api_key = api_key
@@ -76,30 +109,31 @@ class LLMJudgeEvaluator(BaseEvaluator):
         self.custom_prompt = custom_prompt
         self.include_reference = include_reference
         self.rate_limit_delay = rate_limit_delay
+        if decision_mode not in {"binary", "scale_1_5"}:
+            raise ValueError("decision_mode must be binary or scale_1_5")
+        self.decision_mode = decision_mode
         self.client = self._init_client()
 
     def _default_model(self) -> str:
         return DEFAULT_MODEL_BY_PROVIDER.get(self.provider, DEFAULT_MODEL_BY_PROVIDER["openai"])
 
     def _init_client(self):
-        if self.provider == "openai":
-            if openai is None:
-                raise ImportError("openai package not installed")
-            return openai.OpenAI(api_key=self.api_key)
-        elif self.provider == "anthropic":
-            if anthropic is None:
-                raise ImportError("anthropic package not installed")
-            return anthropic.Anthropic(api_key=self.api_key)
-        else:
-            raise ValueError(f"Unsupported provider: {self.provider}")
+        return Bot(
+            provider=self.provider,
+            api_key=self.api_key,
+            model=self.model,
+        )
 
     def _build_prompt(self, output: str, reference: str = None, input_text: str = None) -> str:
         if self.custom_prompt:
-            return self.custom_prompt.format(
-                output=output,
-                reference=reference or "",
-                input=input_text or "",
-            )
+            prompt = self.custom_prompt
+            for placeholder, value in (
+                ("{output}", output),
+                ("{reference}", reference or ""),
+                ("{input}", input_text or ""),
+            ):
+                prompt = prompt.replace(placeholder, value)
+            return prompt
 
         context = ""
         if input_text:
@@ -109,7 +143,12 @@ class LLMJudgeEvaluator(BaseEvaluator):
         if reference and self.include_reference:
             reference_section = f"## Reference/Expected Response\n{reference}"
 
-        return DEFAULT_EVALUATION_PROMPT.format(
+        prompt_template = (
+            BINARY_EVALUATION_PROMPT
+            if self.decision_mode == "binary"
+            else DEFAULT_EVALUATION_PROMPT
+        )
+        return prompt_template.format(
             context=context,
             output=output,
             reference_section=reference_section,
@@ -118,6 +157,21 @@ class LLMJudgeEvaluator(BaseEvaluator):
 
     def _parse_response(self, response_text: str) -> dict:
         """Parse the LLM response to extract score and reasoning."""
+        if self.decision_mode == "binary":
+            try:
+                payload = BinaryJudgeResponse.model_validate_json(response_text)
+            except ValidationError as error:
+                raise ValueError(
+                    'Binary judge returned invalid output; expected exactly '
+                    '{"critique": "...", "result": "Pass"|"Fail"}'
+                ) from error
+            return {
+                "score": 1 if payload.result == "Pass" else 0,
+                "verdict": payload.result,
+                "reasoning": payload.critique,
+                "raw_response": response_text,
+            }
+
         result = {
             "score": None,
             "reasoning": None,
@@ -129,7 +183,6 @@ class LLMJudgeEvaluator(BaseEvaluator):
             line_lower = line.lower()
             if "score:" in line_lower:
                 # Extract number from the line
-                import re
                 numbers = re.findall(r'\d+', line)
                 if numbers:
                     score = int(numbers[0])
@@ -146,21 +199,23 @@ class LLMJudgeEvaluator(BaseEvaluator):
         return result
 
     def _call_openai(self, prompt: str) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
+        return self.client.complete(
+            [{"role": "user", "content": prompt}],
+            max_tokens=500,
+            temperature=0.3,
+            response_schema=(
+                BinaryJudgeResponse.model_json_schema()
+                if self.decision_mode == "binary"
+                else None
+            ),
+        )
+
+    def _call_anthropic(self, prompt: str) -> str:
+        return self.client.complete(
+            [{"role": "user", "content": prompt}],
             max_tokens=500,
             temperature=0.3,
         )
-        return response.choices[0].message.content
-
-    def _call_anthropic(self, prompt: str) -> str:
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text
 
     def evaluate_single(self, output: str, reference: str = None, input_text: str = None) -> dict:
         prompt = self._build_prompt(output, reference, input_text)

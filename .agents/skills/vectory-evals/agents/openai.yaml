@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vectory Evals"
+  short_description: "Discover failures and validate AI evaluators"
+  default_prompt: "Use $vectory-evals to turn my AI outputs or traces into a reviewable, validated evaluation workflow."

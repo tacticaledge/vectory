@@ -1,9 +1,10 @@
 """LLM-as-Judge Evaluation Page - With Animations"""
 
+import json
+import hashlib
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import os
 import sys
 from pathlib import Path
 
@@ -13,12 +14,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 def get_api_key(provider: str) -> str:
     """Get API key from session state or environment. Returns empty string if not found."""
     # Map provider to session state key and env var name
-    key_map = {
-        "openai": ("openai_api_key", "OPENAI_API_KEY"),
-        "anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY"),
-    }
+    key_map = {"openai": "openai_api_key", "anthropic": "anthropic_api_key"}
 
-    session_key, env_key = key_map.get(provider, (None, None))
+    session_key = key_map.get(provider)
     if not session_key:
         return ""
 
@@ -26,16 +24,18 @@ def get_api_key(provider: str) -> str:
     if session_key in st.session_state and st.session_state[session_key]:
         return st.session_state[session_key]
 
-    # Check environment variables
-    env_value = os.environ.get(env_key, "")
-    if env_value:
-        return env_value
-
-    return ""
+    return get_provider_api_key(provider)
 
 from components.models import init_session_state, ColumnMapping, DataSourceType
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_ids, get_model_label
-from components.evaluators.llm_judge import LLMJudgeEvaluator, estimate_cost, CRITERIA_TEMPLATES
+from components.evaluators.llm_judge import (
+    CRITERIA_TEMPLATES,
+    LLMJudgeEvaluator,
+    estimate_cost,
+    get_result_column,
+)
+from components.eval_workflow import validate_evaluator_definition
+from components.provider_config import get_provider_api_key
 from components.ui import (
     inject_custom_css,
     animated_metric,
@@ -92,7 +92,8 @@ df = st.session_state.dataset
 # For tabular data, check column mapping
 mapping = st.session_state.column_mapping
 if isinstance(mapping, dict):
-    mapping = ColumnMapping(**{k.replace("output", "output_col").replace("input", "input_col").replace("expected", "expected_col"): v for k, v in mapping.items() if v})
+    aliases = {"input": "input_col", "output": "output_col", "expected": "expected_col"}
+    mapping = ColumnMapping(**{aliases.get(key, key): value for key, value in mapping.items() if value})
 
 # Different handling based on data source type
 if data_source_type == DataSourceType.TABULAR:
@@ -120,6 +121,42 @@ source_type_labels = {
 }
 icon, label, desc = source_type_labels.get(data_source_type, ("📊", "Data", ""))
 st.info(f"{icon} **{label}** - {desc}")
+
+# Optional promoted evaluator from Error Analysis or a portable JSON artifact.
+promoted_evaluator_options = {}
+for stored_id, stored_definition in st.session_state.get("promoted_evaluators", {}).items():
+    try:
+        promoted_evaluator_options[stored_id] = validate_evaluator_definition(
+            stored_definition, required_kind="llm_judge"
+        )
+    except (TypeError, ValueError) as error:
+        st.warning(f"Ignoring incompatible promoted evaluator {stored_id!r}: {error}")
+uploaded_evaluator = st.file_uploader(
+    "Optional promoted evaluator definition",
+    type=["json"],
+    help="Load a binary evaluator exported from the Error Analysis taxonomy dashboard.",
+)
+uploaded_evaluator_id = None
+if uploaded_evaluator is not None:
+    try:
+        uploaded_bytes = uploaded_evaluator.getvalue()
+        uploaded_definition = validate_evaluator_definition(
+            json.loads(uploaded_bytes), required_kind="llm_judge"
+        )
+        uploaded_evaluator_id = uploaded_definition["evaluator_id"]
+        st.caption(f"Imported evaluator SHA-256: {hashlib.sha256(uploaded_bytes).hexdigest()}")
+        import_approved = st.checkbox(
+            "I reviewed this imported evaluator prompt and approve sending selected records "
+            "and embedded expert examples to the chosen model provider.",
+            key=f"approve-imported-evaluator-{uploaded_evaluator_id}",
+        )
+        if import_approved:
+            uploaded_definition["_imported_untrusted"] = True
+            promoted_evaluator_options[uploaded_evaluator_id] = uploaded_definition
+        else:
+            st.info("The imported evaluator remains disabled until you explicitly approve its prompt.")
+    except (json.JSONDecodeError, TypeError, ValueError) as error:
+        st.error(f"Could not load evaluator definition: {error}")
 
 # Configuration section
 section_header("⚙️ Configuration", style="primary")
@@ -178,19 +215,58 @@ with col2:
     </div>
     """, unsafe_allow_html=True)
 
-    criteria_type = st.selectbox(
-        "Evaluation Criteria",
-        list(CRITERIA_TEMPLATES.keys()),
-        help="What aspect to evaluate"
-    )
-
-    custom_criteria = None
-    if criteria_type == "custom":
-        custom_criteria = st.text_area(
-            "Custom Criteria",
-            placeholder="Describe what the LLM should evaluate...",
-            help="Enter your custom evaluation criteria"
+    selected_promoted_evaluator = None
+    if promoted_evaluator_options:
+        promoted_choice = st.selectbox(
+            "Promoted evaluator",
+            ["None", *promoted_evaluator_options],
+            format_func=lambda value: (
+                "None — configure an exploratory judge"
+                if value == "None"
+                else promoted_evaluator_options[value].get("name", value)
+            ),
         )
+        if promoted_choice != "None":
+            selected_promoted_evaluator = promoted_evaluator_options[promoted_choice]
+
+    if selected_promoted_evaluator:
+        decision_mode = "binary"
+        criteria_type = "custom"
+        custom_criteria = selected_promoted_evaluator["decision"]["pass_definition"]
+        st.success(f"Using focused binary evaluator: {selected_promoted_evaluator['name']}")
+        st.caption(
+            "Running this judge sends the selected records and embedded expert examples to the chosen provider."
+        )
+        if selected_promoted_evaluator.get("_imported_untrusted"):
+            st.warning(
+                "This evaluator came from an uploaded file. Its claimed validation status is informational; "
+                "verify it against your own held-out split before using its predictions for decisions."
+            )
+        if selected_promoted_evaluator.get("status") != "validated":
+            st.warning("This evaluator is not validated. Its predictions must not be treated as ground truth.")
+    else:
+        decision_label = st.selectbox(
+            "Decision format",
+            ["Binary Pass/Fail (recommended)", "1–5 scale (exploratory only)"],
+            help="Binary verdicts have clearer decision boundaries and can be validated as classifiers.",
+        )
+        decision_mode = "binary" if decision_label.startswith("Binary") else "scale_1_5"
+        if decision_mode == "scale_1_5":
+            st.warning("Numeric ratings are not suitable for release gating unless their boundaries are independently calibrated.")
+
+        criteria_type = st.selectbox(
+            "Evaluation Criteria",
+            list(CRITERIA_TEMPLATES.keys()),
+            help="What aspect to evaluate"
+        )
+
+        custom_criteria = None
+        if criteria_type == "custom":
+            custom_criteria = st.text_area(
+                "Custom Criteria",
+                placeholder="Describe what the LLM should evaluate...",
+                help="Enter your custom evaluation criteria"
+            )
 
     include_reference = st.checkbox(
         "Include reference in prompt",
@@ -215,14 +291,20 @@ if data_source_type in [DataSourceType.DOCUMENT, DataSourceType.IMAGE]:
     if data_source_type == DataSourceType.DOCUMENT:
         eval_prompt = st.text_area(
             "Evaluation Prompt",
-            value="Analyze this document and evaluate it based on the following criteria:\n1. Clarity and organization\n2. Completeness of information\n3. Quality of writing\n\nProvide a score from 1-5 and explain your reasoning.",
+            value=(
+                "Pass only when this document is clear, well organized, complete for its intended purpose, "
+                "and written to a professional standard. Explain any material deficiency."
+            ),
             height=150,
             help="Describe what the LLM should evaluate about the document"
         )
     else:  # IMAGE
         eval_prompt = st.text_area(
             "Evaluation Prompt",
-            value="Analyze this image and evaluate it based on:\n1. Visual quality\n2. Content relevance\n3. Information conveyed\n\nProvide a score from 1-5 and explain your reasoning.",
+            value=(
+                "Pass only when the available image information is relevant, legible, and sufficient for "
+                "the intended purpose. Explain any material deficiency."
+            ),
             height=150,
             help="Describe what the LLM should evaluate about the image"
         )
@@ -249,13 +331,30 @@ if "warning" in cost_info:
 
 # Advanced settings
 with st.expander("🔧 Advanced Settings"):
-    use_custom_prompt = st.checkbox("Use custom prompt template")
+    if selected_promoted_evaluator:
+        use_custom_prompt = True
+        custom_prompt = selected_promoted_evaluator["prompt"].replace(
+            "{{evaluation_input}}",
+            "Original input: {input}\nResponse: {output}\nReference: {reference}",
+        )
+        st.caption("Prompt supplied by the promoted evaluator definition")
+        st.code(custom_prompt, language=None)
+    else:
+        use_custom_prompt = st.checkbox("Use custom prompt template")
+        custom_prompt = None
 
-    custom_prompt = None
-    if use_custom_prompt:
-        custom_prompt = st.text_area(
-            "Custom Prompt Template",
-            value="""Evaluate the following response:
+    if use_custom_prompt and not selected_promoted_evaluator:
+        default_custom_prompt = (
+            """Evaluate the following response:
+
+Input: {input}
+Response: {output}
+Reference: {reference}
+
+Return JSON only with exactly these fields:
+{{"critique": "specific explanation", "result": "Pass" or "Fail"}}"""
+            if decision_mode == "binary"
+            else """Evaluate the following response:
 
 Input: {input}
 Response: {output}
@@ -265,7 +364,11 @@ Rate the response on a scale of 1-5 and provide reasoning.
 
 Format:
 Score: [1-5]
-Reasoning: [Your explanation]""",
+Reasoning: [Your explanation]"""
+        )
+        custom_prompt = st.text_area(
+            "Custom Prompt Template",
+            value=default_custom_prompt,
             height=200,
             help="Use {input}, {output}, and {reference} as placeholders"
         )
@@ -312,6 +415,11 @@ else:
             outputs = eval_df[text_col].astype(str).tolist()
             references = None
             inputs = [eval_prompt] * len(outputs)  # Use eval_prompt as the instruction
+            response_instruction = (
+                'Return JSON only: {"critique": "detailed explanation", "result": "Pass" or "Fail"}.'
+                if decision_mode == "binary"
+                else "Provide your evaluation as Score: [1-5] and Reasoning: [detailed explanation]."
+            )
             effective_prompt = f"""You are evaluating a document based on the following criteria:
 
 {eval_prompt}
@@ -319,9 +427,7 @@ else:
 Document Content:
 {{output}}
 
-Provide your evaluation in this format:
-Score: [1-5]
-Reasoning: [Your detailed explanation]"""
+{response_instruction}"""
 
         elif data_source_type == DataSourceType.IMAGE:
             # Image evaluation - currently limited to metadata
@@ -330,6 +436,11 @@ Reasoning: [Your detailed explanation]"""
             outputs = eval_df[text_col].astype(str).tolist()
             references = None
             inputs = [eval_prompt] * len(outputs)
+            response_instruction = (
+                'Return JSON only: {"critique": "detailed explanation", "result": "Pass" or "Fail"}.'
+                if decision_mode == "binary"
+                else "Provide your evaluation as Score: [1-5] and Reasoning: [detailed explanation]."
+            )
             effective_prompt = f"""You are evaluating image metadata based on the following criteria:
 
 {eval_prompt}
@@ -339,9 +450,7 @@ Image Information:
 
 Note: This evaluation is based on image metadata. For full visual analysis, vision-capable models are required.
 
-Provide your evaluation in this format:
-Score: [1-5]
-Reasoning: [Your explanation based on available information]"""
+{response_instruction}"""
             st.info("📝 Note: Image evaluation is currently based on metadata. Full visual analysis requires vision API integration.")
 
         # Initialize evaluator
@@ -355,6 +464,7 @@ Reasoning: [Your explanation based on available information]"""
                 custom_prompt=effective_prompt,
                 include_reference=include_reference if data_source_type == DataSourceType.TABULAR else False,
                 rate_limit_delay=rate_limit,
+                decision_mode=decision_mode,
             )
         except Exception as e:
             st.error(f"Error initializing evaluator: {e}")
@@ -390,47 +500,67 @@ Reasoning: [Your explanation based on available information]"""
             st.markdown("<br>", unsafe_allow_html=True)
 
             # Summary metrics
-            section_header("📊 Score Summary", style="success")
+            section_header(
+                "📊 Verdict Summary" if decision_mode == "binary" else "📊 Score Summary",
+                style="success",
+            )
 
             valid_scores = results["score"].dropna()
 
             if len(valid_scores) > 0:
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    animated_metric("Average", f"{valid_scores.mean():.2f}", "📈", delay=1)
-                with col2:
-                    animated_metric("Median", f"{valid_scores.median():.1f}", "📊", delay=2)
-                with col3:
-                    animated_metric("Min", f"{valid_scores.min():.0f}", "📉", delay=3)
-                with col4:
-                    animated_metric("Max", f"{valid_scores.max():.0f}", "📈", delay=4)
+                if decision_mode == "binary":
+                    verdicts = results["verdict"].dropna()
+                    pass_count = int((verdicts == "Pass").sum())
+                    fail_count = int((verdicts == "Fail").sum())
+                    metric_col1, metric_col2, metric_col3 = st.columns(3)
+                    with metric_col1:
+                        animated_metric("Pass", str(pass_count), "✅", delay=1)
+                    with metric_col2:
+                        animated_metric("Fail", str(fail_count), "❌", delay=2)
+                    with metric_col3:
+                        animated_metric("Pass Rate", f"{pass_count / len(verdicts) * 100:.1f}%", "📊", delay=3)
+                    st.warning(
+                        "These are unvalidated judge predictions, not ground truth. Compare them with held-out "
+                        "domain-expert labels before making release decisions."
+                    )
+                else:
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        animated_metric("Average", f"{valid_scores.mean():.2f}", "📈", delay=1)
+                    with col2:
+                        animated_metric("Median", f"{valid_scores.median():.1f}", "📊", delay=2)
+                    with col3:
+                        animated_metric("Min", f"{valid_scores.min():.0f}", "📉", delay=3)
+                    with col4:
+                        animated_metric("Max", f"{valid_scores.max():.0f}", "📈", delay=4)
 
-                st.markdown("<br>", unsafe_allow_html=True)
-
-                # Score distribution
-                section_header("📈 Score Distribution", style="warning")
-
-                fig = px.histogram(
-                    results,
-                    x="score",
-                    nbins=5,
-                    color_discrete_sequence=["#667eea"],
-                    labels={"score": "Score (1-5)", "count": "Count"}
-                )
-                fig.update_xaxes(dtick=1)
-                fig.update_layout(
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    section_header("📈 Score Distribution", style="warning")
+                    fig = px.histogram(
+                        results,
+                        x="score",
+                        nbins=5,
+                        color_discrete_sequence=["#667eea"],
+                        labels={"score": "Score (1-5)", "count": "Count"}
+                    )
+                    fig.update_xaxes(dtick=1)
+                    fig.update_layout(
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
             # Detailed results
             section_header("📋 Detailed Results", style="primary")
 
             display_cols = [c for c in [mapping_dict["input"], mapping_dict["expected"], mapping_dict["output"]] if c]
             display_df = eval_df[display_cols].reset_index(drop=True).copy()
-            display_df["Score"] = results["score"].values
-            display_df["Reasoning"] = results["reasoning"].values
+            if decision_mode == "binary":
+                display_df["Verdict"] = get_result_column(results, "verdict").values
+                display_df["Critique"] = get_result_column(results, "reasoning").values
+            else:
+                display_df["Score"] = results["score"].values
+                display_df["Reasoning"] = results["reasoning"].values
 
             if "error" in results.columns:
                 errors = results["error"].dropna()
@@ -486,6 +616,9 @@ if "llm_judge" in st.session_state.get("evaluation_results", {}):
 
         col1, col2 = st.columns(2)
         with col1:
-            score_bar(valid_scores.mean() / 5, label="Average Score")
+            if "verdict" in results.columns:
+                score_bar(valid_scores.mean(), label="Predicted Pass Rate")
+            else:
+                score_bar(valid_scores.mean() / 5, label="Average Score")
         with col2:
             st.markdown(f"**Samples Evaluated:** {len(results)}")

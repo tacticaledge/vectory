@@ -1,7 +1,6 @@
 """Settings Page - Theme Configuration, API Keys, and Preferences"""
 
 import streamlit as st
-import os
 import sys
 from pathlib import Path
 
@@ -9,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from components.models import init_session_state
 from components.model_catalog import get_provider_models
+from components.provider_config import get_provider_api_key
 from components.themes import THEMES, get_theme, get_theme_css
 from components.ui import sidebar_logo
 
@@ -66,7 +66,7 @@ with col1:
     """, unsafe_allow_html=True)
 
     # Get existing key from session or environment
-    openai_key = st.session_state.get("openai_api_key", os.environ.get("OPENAI_API_KEY", ""))
+    openai_key = st.session_state.get("openai_api_key", get_provider_api_key("openai"))
     new_openai_key = st.text_input(
         "OpenAI API Key",
         value=openai_key,
@@ -93,7 +93,7 @@ with col2:
     """, unsafe_allow_html=True)
 
     # Get existing key from session or environment
-    anthropic_key = st.session_state.get("anthropic_api_key", os.environ.get("ANTHROPIC_API_KEY", ""))
+    anthropic_key = st.session_state.get("anthropic_api_key", get_provider_api_key("anthropic"))
     new_anthropic_key = st.text_input(
         "Anthropic API Key",
         value=anthropic_key,

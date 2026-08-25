@@ -3,15 +3,7 @@
 import json
 from typing import Any
 
-try:
-    import openai
-except ImportError:
-    openai = None
-
-try:
-    import anthropic
-except ImportError:
-    anthropic = None
+from components.agentic import Bot
 
 
 TAXONOMY_SYSTEM_PROMPT = """You help evaluation teams build failure-mode taxonomies from human review notes.
@@ -138,34 +130,15 @@ def generate_taxonomy_suggestions(
     """Call an LLM provider and return normalized taxonomy suggestions."""
     prompt = build_taxonomy_prompt(open_codes, existing_failure_modes)
 
-    if provider == "openai":
-        if openai is None:
-            raise ImportError("openai package not installed")
-        client = openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": TAXONOMY_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=1200,
-            temperature=0.2,
-            response_format={"type": "json_object"},
-        )
-        response_text = response.choices[0].message.content
-    elif provider == "anthropic":
-        if anthropic is None:
-            raise ImportError("anthropic package not installed")
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model=model,
-            max_tokens=1200,
-            temperature=0.2,
-            system=TAXONOMY_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        response_text = response.content[0].text
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
+    bot = Bot(provider=provider, api_key=api_key, model=model)
+    response_text = bot.complete(
+        [
+            {"role": "system", "content": TAXONOMY_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=1200,
+        temperature=0.2,
+        json_mode=True,
+    )
 
     return parse_taxonomy_suggestions(response_text)
