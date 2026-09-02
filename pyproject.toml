@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vectoryai"
-version = "1.1.0"
+dynamic = ["version"]
 description = "Open-source LLM and agent evaluation toolkit with custom benchmarks and proof-grounded trace scoring."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -78,6 +78,9 @@ packages = [
     "components.vectory_benchmark",
     "vectory_cli",
 ]
+
+[tool.setuptools.dynamic]
+version = { attr = "components.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

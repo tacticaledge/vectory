@@ -7,12 +7,23 @@ if __name__ == "__main__":
 
 import pytest
 
+from components import __version__ as component_version
 from components.eval_workflow import build_evaluator_definition
+from vectory_cli import __version__ as cli_version
 from vectory_cli.cli import main
 
 
 def write_jsonl(path, records):
     path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+
+def test_cli_version_uses_authoritative_component_version(capsys):
+    with pytest.raises(SystemExit) as error:
+        main(["--version"])
+
+    assert error.value.code == 0
+    assert cli_version == component_version == "1.1.0"
+    assert capsys.readouterr().out.strip() == "Vectory CLI 1.1.0"
 
 
 def test_discover_and_promote_workflow(tmp_path):
