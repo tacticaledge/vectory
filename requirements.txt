@@ -29,8 +29,8 @@ Pillow>=10.4.0              # Fixed CVE-2023-50447, CVE-2023-5129
 # LLM Evaluation Metrics
 # -----------------------------------------------------------------------------
 evaluate>=0.4.1             # HuggingFace evaluate library
-rouge-score>=0.1.2          # ROUGE metrics
-nltk>=3.9.0                 # Natural Language Toolkit
+rapidrouge==0.2.0           # ROUGE metrics without NLTK runtime dependency
+PyStemmer==3.1.0           # Porter stemming for ROUGE
 python-Levenshtein>=0.25.0  # Fast Levenshtein distance
 
 # -----------------------------------------------------------------------------

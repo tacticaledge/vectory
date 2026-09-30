@@ -157,6 +157,15 @@ class TestROUGEEvaluator:
         if rouge_scores:
             assert max(rouge_scores) > 0.5
 
+    def test_stemmed_rouge_keeps_previous_scores(self):
+        """The NLTK-free scorer must retain the prior stemmed ROUGE result."""
+        result = ROUGEEvaluator().evaluate_single(
+            "runner runs rapidly", "running runners ran rapidly"
+        )
+        assert result["rouge1"] == pytest.approx(6 / 7)
+        assert result["rouge2"] == pytest.approx(0.0)
+        assert result["rougeL"] == pytest.approx(4 / 7)
+
 
 class TestRegexEvaluator:
     """Tests for RegexEvaluator."""
