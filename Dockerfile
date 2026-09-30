@@ -7,11 +7,7 @@ COPY requirements.txt .
 RUN pip --python /venv/bin/python install --no-cache-dir -r requirements.txt \
     && pip --python /venv/bin/python install --no-cache-dir 'msgpack>=1.2.1'
 
-FROM builder AS test
-COPY . .
-RUN pip --python /venv/bin/python install --no-cache-dir -e '.[dev]'
-
-FROM cgr.dev/chainguard/python:latest
+FROM cgr.dev/chainguard/python:latest AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -31,3 +27,12 @@ USER 10001:10001
 EXPOSE 8501
 ENTRYPOINT ["python"]
 CMD ["-m", "streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+
+FROM cgr.dev/chainguard/python:latest-dev AS test
+USER root
+WORKDIR /app
+COPY --from=runtime /venv /venv
+COPY --from=runtime /app /app
+RUN pip install --no-cache-dir --target /testtools 'pytest>=7,<9'
+
+FROM runtime AS final
