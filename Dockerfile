@@ -1,6 +1,7 @@
-FROM public.ecr.aws/docker/library/python:3.11-slim
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023-minimal
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOME=/home/vectory \
     XDG_CACHE_HOME=/home/vectory/.cache \
@@ -10,13 +11,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get upgrade -y \
-    && rm -rf /var/lib/apt/lists/*
+RUN microdnf upgrade -y \
+    && microdnf install -y python3.11 python3.11-pip shadow-utils \
+    && microdnf clean all \
+    && python3.11 -m venv /opt/venv
 
 COPY requirements.txt .
+COPY infra/vulnerability-maintenance/patches/requirements.txt /tmp/security-patches.txt
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.txt -r /tmp/security-patches.txt \
+    && pip check \
+    && pip uninstall --yes pip
 
 RUN groupadd --system --gid 10001 vectory \
     && useradd --system --uid 10001 --gid vectory --home-dir /home/vectory --create-home vectory \
