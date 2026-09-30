@@ -8,9 +8,23 @@ except ImportError:
     levenshtein_distance = None
 
 try:
-    from rouge_score import rouge_scorer
+    from rapidrouge import rouge_scorer, tokenize
+    import Stemmer
 except ImportError:
     rouge_scorer = None
+
+
+class _PorterTokenizer:
+    """Preserve stemmed ROUGE without loading NLTK into the runtime image."""
+
+    def __init__(self):
+        self._stemmer = Stemmer.Stemmer("porter")
+
+    def tokenize(self, text: str) -> list[str]:
+        return tokenize.tokenize(text, self)
+
+    def stem(self, word: str) -> str:
+        return self._stemmer.stemWord(word)
 
 try:
     import evaluate
@@ -199,7 +213,7 @@ class ROUGEEvaluator(BaseEvaluator):
     def __init__(self, rouge_types: list = None):
         self.rouge_types = rouge_types or ["rouge1", "rouge2", "rougeL"]
         if rouge_scorer:
-            self.scorer = rouge_scorer.RougeScorer(self.rouge_types, use_stemmer=True)
+            self.scorer = rouge_scorer.RougeScorer(self.rouge_types, tokenizer=_PorterTokenizer())
         else:
             self.scorer = None
 
@@ -208,7 +222,7 @@ class ROUGEEvaluator(BaseEvaluator):
             return {"rouge1": None, "rouge2": None, "rougeL": None, "error": "Reference required"}
 
         if self.scorer is None:
-            return {"rouge1": None, "rouge2": None, "rougeL": None, "error": "rouge-score not installed"}
+            return {"rouge1": None, "rouge2": None, "rougeL": None, "error": "rapidrouge not installed"}
 
         try:
             scores = self.scorer.score(str(reference), str(output))

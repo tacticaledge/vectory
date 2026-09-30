@@ -435,14 +435,6 @@ pip install -e ".[embedding]"
 
 The app works without PyTorch. Local embedding model execution stays disabled until the optional embedding extra is installed.
 
-### NLTK Data Missing
-
-If you see NLTK-related errors:
-
-```bash
-python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
-```
-
 ### API Key Issues
 
 - Ensure your API key is valid and has sufficient credits
