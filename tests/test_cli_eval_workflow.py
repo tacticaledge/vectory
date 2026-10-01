@@ -22,8 +22,8 @@ def test_cli_version_uses_authoritative_component_version(capsys):
         main(["--version"])
 
     assert error.value.code == 0
-    assert cli_version == component_version == "1.1.0"
-    assert capsys.readouterr().out.strip() == "Vectory CLI 1.1.0"
+    assert cli_version == component_version
+    assert capsys.readouterr().out.strip() == f"Vectory CLI {component_version}"
 
 
 def test_discover_and_promote_workflow(tmp_path):
