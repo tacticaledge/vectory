@@ -6,10 +6,12 @@ repository, its source archive, logs, and scan evidence.
 """
 
 import datetime as dt
+from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 import urllib.request
@@ -25,8 +27,36 @@ TAG = "ga-1.1.1-c1691ee"
 EVIDENCE_BUCKET = "marketplace-images-tactical-edge"
 
 
-def main():
-    m.REPORTS.mkdir(parents=True, exist_ok=True)
+@dataclass(frozen=True)
+class BuildConfig:
+    build_id: str
+
+    @classmethod
+    def from_environment(cls):
+        project, separator, build_id = os.environ.get("CODEBUILD_BUILD_ID", "").partition(":")
+        if project != "vectory-marketplace-ga-build" or not separator or not re.fullmatch(r"[0-9a-f-]{36}", build_id):
+            raise RuntimeError("Invalid CodeBuild build identity")
+        return cls(build_id=build_id)
+
+
+def image_by_tag(tag):
+    response = m.aws("ecr", "batch-get-image", "--registry-id", MARKETPLACE_REGISTRY,
+                     "--repository-name", "tactical-edge/vectory-self-hosted",
+                     "--image-ids", f"imageTag={tag}")
+    if response.get("failures") or len(response.get("images", [])) != 1:
+        raise RuntimeError("Marketplace registry image read-back failed")
+    return response["images"][0]
+
+
+def delete_tag(tag):
+    response = m.aws("ecr", "batch-delete-image", "--registry-id", MARKETPLACE_REGISTRY,
+                     "--repository-name", "tactical-edge/vectory-self-hosted",
+                     "--image-ids", f"imageTag={tag}")
+    if response.get("failures"):
+        raise RuntimeError(f"Marketplace image tag cleanup failed for {tag}")
+
+
+def verify_and_stage(build_id):
     manifest = json.loads(Path("marketplace-source.json").read_text())
     if manifest != {"commit": SOURCE_COMMIT, "version": "1.1.1"}:
         raise RuntimeError("Source archive does not match reviewed GA release")
@@ -37,8 +67,13 @@ def main():
     if '__version__ = "1.1.1"' not in Path("components/__init__.py").read_text():
         raise RuntimeError("Release version mismatch")
 
-    build_id = os.environ["CODEBUILD_BUILD_ID"].split(":")[-1]
-    image = f"{IMAGE}:{TAG}"
+    candidate_tag = f"candidate-{build_id}"
+    image = f"{IMAGE}:{candidate_tag}"
+    existing = m.aws("ecr", "batch-get-image", "--registry-id", MARKETPLACE_REGISTRY,
+                     "--repository-name", "tactical-edge/vectory-self-hosted",
+                     "--image-ids", f"imageTag={TAG}")
+    if existing.get("images") or len(existing.get("failures", [])) != 1 or existing["failures"][0].get("failureCode") != "ImageNotFound":
+        raise RuntimeError("GA tag exists or its absence could not be proven")
     password = m.command("aws", "ecr", "get-login-password", "--region", m.REGION, capture=True)
     m.command("docker", "login", "--username", "AWS", "--password-stdin", MARKETPLACE_REGISTRY + ".dkr.ecr.us-east-1.amazonaws.com", input=password)
     archive = Path("/tmp/trivy.tar.gz")
@@ -83,25 +118,57 @@ def main():
     m.save("candidate-summary.json", candidate)
     if not candidate["eligible"]:
         raise RuntimeError("Candidate image has HIGH, CRITICAL or UNKNOWN findings")
-    m.command("docker", "push", image)
-    details = m.aws("ecr", "batch-get-image", "--registry-id", MARKETPLACE_REGISTRY,
-                    "--repository-name", "tactical-edge/vectory-self-hosted",
-                    "--image-ids", f"imageTag={TAG}")
-    if details.get("failures") or len(details.get("images", [])) != 1:
-        raise RuntimeError("Marketplace registry image read-back failed")
-    digest = details["images"][0]["imageId"]["imageDigest"]
-    registry = m.gate(m.scan(f"{IMAGE}@{digest}", "registry-trivy.json"))
-    m.save("registry-summary.json", registry)
-    if not registry["eligible"]:
-        raise RuntimeError("Marketplace registry image has HIGH, CRITICAL or UNKNOWN findings")
-    result = {"status": "STAGED", "build": build_id, "sourceCommit": SOURCE_COMMIT,
-              "image": f"{IMAGE}@{digest}", "candidate": candidate["counts"],
-              "registry": registry["counts"]}
-    m.save("status.json", result)
-    m.command("aws", "s3", "cp", str(m.REPORTS),
-              f"s3://{EVIDENCE_BUCKET}/vectory/build-evidence/{build_id}/", "--recursive",
-              "--region", m.REGION)
-    print(json.dumps(result), flush=True)
+    candidate_pushed = False
+    ga_tagged = False
+    try:
+        m.command("docker", "push", image)
+        candidate_pushed = True
+        registered = image_by_tag(candidate_tag)
+        digest = registered["imageId"]["imageDigest"]
+        registry = m.gate(m.scan(f"{IMAGE}@{digest}", "registry-trivy.json"))
+        m.save("registry-summary.json", registry)
+        if not registry["eligible"]:
+            raise RuntimeError("Marketplace registry image has HIGH, CRITICAL or UNKNOWN findings")
+        m.aws("ecr", "put-image", "--registry-id", MARKETPLACE_REGISTRY,
+              "--repository-name", "tactical-edge/vectory-self-hosted",
+              "--image-manifest", registered["imageManifest"], "--image-tag", TAG)
+        ga_tagged = True
+        if image_by_tag(TAG)["imageId"]["imageDigest"] != digest:
+            raise RuntimeError("GA tag digest does not match scanned candidate")
+        delete_tag(candidate_tag)
+        candidate_pushed = False
+        return {"status": "STAGED", "build": build_id, "sourceCommit": SOURCE_COMMIT,
+                "image": f"{IMAGE}@{digest}", "candidate": candidate["counts"],
+                "registry": registry["counts"]}
+    except Exception:
+        if ga_tagged:
+            delete_tag(TAG)
+        if candidate_pushed:
+            delete_tag(candidate_tag)
+        raise
+
+
+def main():
+    config = BuildConfig.from_environment()
+    m.REPORTS.mkdir(parents=True, exist_ok=True)
+    failed = False
+    try:
+        result = verify_and_stage(config.build_id)
+    except Exception as exc:
+        failed = True
+        result = {"status": "FAILED", "build": config.build_id, "error": str(exc)}
+        raise
+    finally:
+        m.save("status.json", result)
+        print(json.dumps(result), flush=True)
+        try:
+            m.command("aws", "s3", "cp", str(m.REPORTS),
+                      f"s3://{EVIDENCE_BUCKET}/vectory/build-evidence/{config.build_id}/",
+                      "--recursive", "--region", m.REGION)
+        except Exception as exc:
+            print(json.dumps({"evidenceUploadError": str(exc), "build": config.build_id}), flush=True)
+            if not failed:
+                raise
 
 
 if __name__ == "__main__":
