@@ -48,14 +48,6 @@ def image_by_tag(tag):
     return response["images"][0]
 
 
-def delete_tag(tag):
-    response = m.aws("ecr", "batch-delete-image", "--registry-id", MARKETPLACE_REGISTRY,
-                     "--repository-name", "tactical-edge/vectory-self-hosted",
-                     "--image-ids", f"imageTag={tag}")
-    if response.get("failures"):
-        raise RuntimeError(f"Marketplace image tag cleanup failed for {tag}")
-
-
 def verify_and_stage(build_id):
     manifest = json.loads(Path("marketplace-source.json").read_text())
     if manifest != {"commit": SOURCE_COMMIT, "version": "1.1.1"}:
@@ -118,34 +110,24 @@ def verify_and_stage(build_id):
     m.save("candidate-summary.json", candidate)
     if not candidate["eligible"]:
         raise RuntimeError("Candidate image has HIGH, CRITICAL or UNKNOWN findings")
-    candidate_pushed = False
-    ga_tagged = False
-    try:
-        m.command("docker", "push", image)
-        candidate_pushed = True
-        registered = image_by_tag(candidate_tag)
-        digest = registered["imageId"]["imageDigest"]
-        registry = m.gate(m.scan(f"{IMAGE}@{digest}", "registry-trivy.json"))
-        m.save("registry-summary.json", registry)
-        if not registry["eligible"]:
-            raise RuntimeError("Marketplace registry image has HIGH, CRITICAL or UNKNOWN findings")
-        m.aws("ecr", "put-image", "--registry-id", MARKETPLACE_REGISTRY,
-              "--repository-name", "tactical-edge/vectory-self-hosted",
-              "--image-manifest", registered["imageManifest"], "--image-tag", TAG)
-        ga_tagged = True
-        if image_by_tag(TAG)["imageId"]["imageDigest"] != digest:
-            raise RuntimeError("GA tag digest does not match scanned candidate")
-        delete_tag(candidate_tag)
-        candidate_pushed = False
-        return {"status": "STAGED", "build": build_id, "sourceCommit": SOURCE_COMMIT,
-                "image": f"{IMAGE}@{digest}", "candidate": candidate["counts"],
-                "registry": registry["counts"]}
-    except Exception:
-        if ga_tagged:
-            delete_tag(TAG)
-        if candidate_pushed:
-            delete_tag(candidate_tag)
-        raise
+    # Marketplace-owned ECR permits sellers to push but not delete images.
+    # A failed registry scan leaves only this clearly marked candidate tag;
+    # no buyer delivery version references it.
+    m.command("docker", "push", image)
+    registered = image_by_tag(candidate_tag)
+    digest = registered["imageId"]["imageDigest"]
+    registry = m.gate(m.scan(f"{IMAGE}@{digest}", "registry-trivy.json"))
+    m.save("registry-summary.json", registry)
+    if not registry["eligible"]:
+        raise RuntimeError("Marketplace registry image has HIGH, CRITICAL or UNKNOWN findings")
+    m.aws("ecr", "put-image", "--registry-id", MARKETPLACE_REGISTRY,
+          "--repository-name", "tactical-edge/vectory-self-hosted",
+          "--image-manifest", registered["imageManifest"], "--image-tag", TAG)
+    if image_by_tag(TAG)["imageId"]["imageDigest"] != digest:
+        raise RuntimeError("GA tag digest does not match scanned candidate")
+    return {"status": "STAGED", "build": build_id, "sourceCommit": SOURCE_COMMIT,
+            "image": f"{IMAGE}@{digest}", "candidate": candidate["counts"],
+            "registry": registry["counts"]}
 
 
 def main():
