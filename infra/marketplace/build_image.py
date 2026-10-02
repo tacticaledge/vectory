@@ -6,15 +6,16 @@ repository, its source archive, logs, and scan evidence.
 """
 
 import datetime as dt
-from dataclasses import dataclass
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import sys
 import time
 import urllib.request
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "vulnerability-maintenance"))
 import maintain as m  # noqa: E402
@@ -27,16 +28,38 @@ TAG = "ga-1.1.1-c1691ee"
 EVIDENCE_BUCKET = "marketplace-images-tactical-edge"
 
 
-@dataclass(frozen=True)
-class BuildConfig:
-    build_id: str
+class BuildConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="", extra="ignore")
+    codebuild_build_id: str = Field(validation_alias="CODEBUILD_BUILD_ID")
+    vectory_expected_source_tree_sha256: str = Field(validation_alias="VECTORY_EXPECTED_SOURCE_TREE_SHA256")
 
-    @classmethod
-    def from_environment(cls):
-        project, separator, build_id = os.environ.get("CODEBUILD_BUILD_ID", "").partition(":")
+    @property
+    def build_id(self):
+        project, separator, build_id = self.codebuild_build_id.partition(":")
         if project != "vectory-marketplace-ga-build" or not separator or not re.fullmatch(r"[0-9a-f-]{36}", build_id):
             raise RuntimeError("Invalid CodeBuild build identity")
-        return cls(build_id=build_id)
+        return build_id
+
+
+def verify_source(config):
+    manifest = json.loads(Path("marketplace-source.json").read_text())
+    if manifest.get("commit") != SOURCE_COMMIT or manifest.get("version") != "1.1.1":
+        raise RuntimeError("Source archive does not match reviewed GA release")
+    expected = manifest.get("files")
+    if not isinstance(expected, list) or not expected or expected != sorted(set(expected)):
+        raise RuntimeError("Invalid source file inventory")
+    actual = sorted(p.as_posix() for p in Path(".").rglob("*") if p.is_file()
+                    and "__pycache__" not in p.parts and p.as_posix() != "marketplace-source.json")
+    if actual != expected:
+        raise RuntimeError("Source archive file inventory changed")
+    source_hash = hashlib.sha256()
+    for name in expected:
+        source_hash.update(name.encode() + b"\0" + Path(name).read_bytes() + b"\0")
+    if not re.fullmatch(r"[a-f0-9]{64}", config.vectory_expected_source_tree_sha256):
+        raise RuntimeError("Invalid approved source tree hash")
+    if source_hash.hexdigest() != config.vectory_expected_source_tree_sha256:
+        raise RuntimeError("Source archive differs from independently approved tree hash")
+    return source_hash.hexdigest()
 
 
 def image_by_tag(tag):
@@ -48,10 +71,8 @@ def image_by_tag(tag):
     return response["images"][0]
 
 
-def verify_and_stage(build_id):
-    manifest = json.loads(Path("marketplace-source.json").read_text())
-    if manifest != {"commit": SOURCE_COMMIT, "version": "1.1.1"}:
-        raise RuntimeError("Source archive does not match reviewed GA release")
+def verify_and_stage(config):
+    source_hash = verify_source(config)
     if m.aws("sts", "get-caller-identity")["Account"] != SELLER_ACCOUNT:
         raise RuntimeError("Build is not running in the Marketplace seller account")
     if 'Development Status :: 5 - Production/Stable' not in Path("pyproject.toml").read_text():
@@ -59,7 +80,7 @@ def verify_and_stage(build_id):
     if '__version__ = "1.1.1"' not in Path("components/__init__.py").read_text():
         raise RuntimeError("Release version mismatch")
 
-    candidate_tag = f"candidate-{build_id}"
+    candidate_tag = f"candidate-{config.build_id}"
     image = f"{IMAGE}:{candidate_tag}"
     existing = m.aws("ecr", "batch-get-image", "--registry-id", MARKETPLACE_REGISTRY,
                      "--repository-name", "tactical-edge/vectory-self-hosted",
@@ -125,17 +146,18 @@ def verify_and_stage(build_id):
           "--image-manifest", registered["imageManifest"], "--image-tag", TAG)
     if image_by_tag(TAG)["imageId"]["imageDigest"] != digest:
         raise RuntimeError("GA tag digest does not match scanned candidate")
-    return {"status": "STAGED", "build": build_id, "sourceCommit": SOURCE_COMMIT,
+    return {"status": "STAGED", "build": config.build_id, "sourceCommit": SOURCE_COMMIT,
+            "sourceTreeSha256": source_hash,
             "image": f"{IMAGE}@{digest}", "candidate": candidate["counts"],
             "registry": registry["counts"]}
 
 
 def main():
-    config = BuildConfig.from_environment()
+    config = BuildConfig()
     m.REPORTS.mkdir(parents=True, exist_ok=True)
     failed = False
     try:
-        result = verify_and_stage(config.build_id)
+        result = verify_and_stage(config)
     except Exception as exc:
         failed = True
         result = {"status": "FAILED", "build": config.build_id, "error": str(exc)}
