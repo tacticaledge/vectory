@@ -9,7 +9,7 @@
 ## Features
 
 - **📊 Dataset Management** - Upload JSON, CSV, or PDF files. Automatic column detection and mapping.
-- **🤖 LLM-as-Judge** - Run critique-first binary judges by default, import promoted failure-mode evaluators, and retain exploratory 1–5 scoring for compatibility.
+- **🤖 LLM-as-Judge** - Run critique-first binary judges by default, import promoted failure-mode evaluators, and retain exploratory 1–5 scoring for compatibility. Each run records per-row token usage and list-price cost, including cache reads and reasoning tokens.
 - **📏 Rule-Based Metrics** - Calculate BLEU, ROUGE, exact match, Levenshtein similarity, and regex patterns.
 - **🔍 Error Analysis** - Review diverse trace samples, capture expert Pass/Fail critiques, discover failure modes, find related examples, and promote focused evaluators.
 - **🔎 RAG Metrics** - Evaluate retrieval precision, recall, MRR, NDCG, context relevance, faithfulness, and answer completeness.

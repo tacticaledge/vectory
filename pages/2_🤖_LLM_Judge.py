@@ -33,6 +33,7 @@ from components.evaluators.llm_judge import (
     LLMJudgeEvaluator,
     estimate_cost,
     get_result_column,
+    summarize_usage,
 )
 from components.eval_workflow import validate_evaluator_definition
 from components.provider_config import get_provider_api_key
@@ -311,24 +312,6 @@ if data_source_type in [DataSourceType.DOCUMENT, DataSourceType.IMAGE]:
 else:
     eval_prompt = None
 
-# Cost estimation
-st.markdown("<br>", unsafe_allow_html=True)
-section_header("💰 Cost Estimate", style="warning")
-
-num_samples = len(df)
-cost_info = estimate_cost(num_samples, provider, model)
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    animated_metric("Samples", str(num_samples), "📊", delay=1)
-with col2:
-    animated_metric("Est. Tokens", f"{cost_info.get('total_tokens', 'N/A'):,}", "📝", delay=2)
-with col3:
-    animated_metric("Est. Cost", cost_info.get("estimated_cost", "Unknown"), "💵", delay=3)
-
-if "warning" in cost_info:
-    st.caption(cost_info["warning"])
-
 # Advanced settings
 with st.expander("🔧 Advanced Settings"):
     if selected_promoted_evaluator:
@@ -383,6 +366,67 @@ Reasoning: [Your explanation]"""
         )
     else:
         max_samples = len(df)
+
+# Cost estimation
+st.markdown("<br>", unsafe_allow_html=True)
+section_header("💰 Cost Estimate", style="warning")
+
+num_samples = int(max_samples)
+measure_key = (provider, model, decision_mode, criteria_type, custom_criteria, include_reference, custom_prompt, num_samples)
+measured = st.session_state.get("llm_judge_measured_tokens")
+measured_input = measured["input_tokens_per_sample"] if measured and measured["key"] == measure_key else None
+cost_info = estimate_cost(num_samples, provider, model, input_tokens_per_sample=measured_input)
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    animated_metric("Samples", str(num_samples), "📊", delay=1)
+with col2:
+    animated_metric("Est. Tokens", f"{cost_info.get('total_tokens', 'N/A'):,}", "📝", delay=2)
+with col3:
+    animated_metric("Est. Cost", cost_info.get("estimated_cost", "Unknown"), "💵", delay=3)
+
+if "warning" in cost_info:
+    st.caption(cost_info["warning"])
+elif measured_input is not None:
+    st.caption(
+        f"Input tokens measured with the Anthropic token counter: {measured_input:,.0f} per sample. "
+        "Output assumes 300 tokens per sample; thinking can add more."
+    )
+else:
+    st.caption("Rough estimate: 500 tokens per sample, split 70% input and 30% output.")
+
+if (
+    provider == "anthropic"
+    and api_key
+    and data_source_type == DataSourceType.TABULAR
+    and measured_input is None
+    and st.button("📏 Measure exact input tokens", help="Counts tokens for up to 20 sampled prompts. Token counting is free.")
+):
+    sample_df = df.head(num_samples)
+    try:
+        measuring_evaluator = LLMJudgeEvaluator(
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            criteria=criteria_type,
+            custom_criteria=custom_criteria,
+            custom_prompt=custom_prompt if use_custom_prompt else None,
+            include_reference=include_reference,
+            decision_mode=decision_mode,
+        )
+        tokens_per_sample = measuring_evaluator.measure_input_tokens(
+            sample_df[mapping_dict["output"]].astype(str).tolist(),
+            sample_df[mapping_dict["expected"]].astype(str).tolist() if mapping_dict.get("expected") else None,
+            sample_df[mapping_dict["input"]].astype(str).tolist() if mapping_dict.get("input") else None,
+        )
+    except Exception as e:
+        st.error(f"Token counting failed: {e}")
+    else:
+        st.session_state["llm_judge_measured_tokens"] = {
+            "key": measure_key,
+            "input_tokens_per_sample": tokens_per_sample,
+        }
+        st.rerun()
 
 # Run evaluation
 st.markdown("<br>", unsafe_allow_html=True)
@@ -550,6 +594,35 @@ Note: This evaluation is based on image metadata. For full visual analysis, visi
                     )
                     st.plotly_chart(fig, use_container_width=True)
 
+            usage_summary = summarize_usage(results)
+            if usage_summary:
+                section_header("💵 Actual Usage", style="warning")
+                usage_col1, usage_col2, usage_col3, usage_col4 = st.columns(4)
+                with usage_col1:
+                    actual_cost = usage_summary["cost_usd"]
+                    animated_metric(
+                        "Actual Cost",
+                        f"${actual_cost:.4f}" if actual_cost is not None else "Unknown",
+                        "💵",
+                        delay=1,
+                    )
+                with usage_col2:
+                    animated_metric(
+                        "Input Tokens",
+                        f"{usage_summary['input_tokens'] + usage_summary['cached_input_tokens'] + usage_summary['cache_write_tokens']:,}",
+                        "📥",
+                        delay=2,
+                    )
+                with usage_col3:
+                    animated_metric("Output Tokens", f"{usage_summary['output_tokens']:,}", "📤", delay=3)
+                with usage_col4:
+                    animated_metric("Cache Hit Rate", f"{usage_summary['cache_hit_rate'] * 100:.0f}%", "♻️", delay=4)
+                st.caption(
+                    f"List-price cost for {usage_summary['billed_calls']} billed calls. "
+                    f"Output includes {usage_summary['reasoning_tokens']:,} reasoning tokens. "
+                    f"Estimate before the run was {cost_info.get('estimated_cost', 'Unknown')}."
+                )
+
             # Detailed results
             section_header("📋 Detailed Results", style="primary")
 
@@ -561,6 +634,12 @@ Note: This evaluation is based on image metadata. For full visual analysis, visi
             else:
                 display_df["Score"] = results["score"].values
                 display_df["Reasoning"] = results["reasoning"].values
+            if "cost_usd" in results.columns:
+                display_df["Tokens In"] = (
+                    results["input_tokens"] + results["cached_input_tokens"] + results["cache_write_tokens"]
+                ).values
+                display_df["Tokens Out"] = results["output_tokens"].values
+                display_df["Cost (USD)"] = results["cost_usd"].values
 
             if "error" in results.columns:
                 errors = results["error"].dropna()

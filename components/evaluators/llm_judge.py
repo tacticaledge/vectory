@@ -2,8 +2,9 @@ import re
 import time
 from typing import Literal
 
-from components.agentic import Bot
+from components.agentic import Bot, Completion
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_pricing
+from components.usage import TokenUsage, usage_cost
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .base import BaseEvaluator
@@ -155,6 +156,18 @@ class LLMJudgeEvaluator(BaseEvaluator):
             criteria=self.criteria,
         )
 
+    def _cache_prefix(self) -> str | None:
+        """Return the prompt text shared by every row, which Anthropic can serve from cache."""
+        if self.provider != "anthropic" or not self.custom_prompt:
+            return None
+        positions = [
+            self.custom_prompt.find(placeholder)
+            for placeholder in ("{output}", "{reference}", "{input}")
+            if placeholder in self.custom_prompt
+        ]
+        prefix = self.custom_prompt[: min(positions)] if positions else self.custom_prompt
+        return prefix or None
+
     def _parse_response(self, response_text: str) -> dict:
         """Parse the LLM response to extract score and reasoning."""
         if self.decision_mode == "binary":
@@ -198,8 +211,8 @@ class LLMJudgeEvaluator(BaseEvaluator):
 
         return result
 
-    def _call_openai(self, prompt: str) -> str:
-        return self.client.complete(
+    def _call_openai(self, prompt: str) -> Completion:
+        return self.client.complete_with_usage(
             [{"role": "user", "content": prompt}],
             max_tokens=500,
             temperature=0.3,
@@ -210,11 +223,13 @@ class LLMJudgeEvaluator(BaseEvaluator):
             ),
         )
 
-    def _call_anthropic(self, prompt: str) -> str:
-        return self.client.complete(
+    def _call_anthropic(self, prompt: str) -> Completion:
+        # Current Claude models always think; leave room for thinking before the critique.
+        return self.client.complete_with_usage(
             [{"role": "user", "content": prompt}],
-            max_tokens=500,
+            max_tokens=4000,
             temperature=0.3,
+            cache_prefix=self._cache_prefix(),
         )
 
     def evaluate_single(self, output: str, reference: str = None, input_text: str = None) -> dict:
@@ -222,17 +237,45 @@ class LLMJudgeEvaluator(BaseEvaluator):
 
         try:
             if self.provider == "openai":
-                response_text = self._call_openai(prompt)
+                completion = self._call_openai(prompt)
             elif self.provider == "anthropic":
-                response_text = self._call_anthropic(prompt)
+                completion = self._call_anthropic(prompt)
             else:
                 return {"score": None, "error": f"Unsupported provider: {self.provider}"}
-
-            result = self._parse_response(response_text)
-            return result
-
         except Exception as e:
             return {"score": None, "reasoning": None, "error": str(e)}
+
+        # Usage is recorded even when the response fails to parse: the call was still billed.
+        usage_fields = usage_columns(self.provider, self.model, completion.usage)
+        try:
+            result = self._parse_response(completion.text)
+        except Exception as e:
+            return {"score": None, "reasoning": None, "error": str(e), **usage_fields}
+        return {**result, **usage_fields}
+
+    def measure_input_tokens(
+        self,
+        outputs: list[str],
+        references: list[str] = None,
+        inputs: list[str] = None,
+        sample_size: int = 20,
+    ) -> float | None:
+        """Return mean exact input tokens over a row sample, or None when the provider cannot count."""
+        if not outputs:
+            return None
+        step = max(len(outputs) // sample_size, 1)
+        counts = []
+        for i in range(0, len(outputs), step)[:sample_size]:
+            prompt = self._build_prompt(
+                outputs[i],
+                references[i] if references else None,
+                inputs[i] if inputs else None,
+            )
+            count = self.client.count_input_tokens([{"role": "user", "content": prompt}])
+            if count is None:
+                return None
+            counts.append(count)
+        return sum(counts) / len(counts)
 
     def evaluate_batch(
         self,
@@ -265,20 +308,64 @@ class LLMJudgeEvaluator(BaseEvaluator):
         return pd.DataFrame(results)
 
 
+USAGE_COLUMNS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "cache_write_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+)
+
+
+def usage_columns(provider: str, model: str, usage: TokenUsage) -> dict:
+    """Flatten one call's usage into per-row result columns."""
+    return {
+        **{name: getattr(usage, name) for name in USAGE_COLUMNS},
+        "cost_usd": usage_cost(provider, model, usage),
+    }
+
+
+def summarize_usage(results) -> dict | None:
+    """Total the billed usage recorded in a judge results frame, or None if none was recorded."""
+    if "input_tokens" not in results.columns:
+        return None
+    totals = {name: int(results[name].fillna(0).sum()) for name in USAGE_COLUMNS}
+    billed_rows = int(results["input_tokens"].notna().sum())
+    costs = results["cost_usd"]
+    totals["billed_calls"] = billed_rows
+    totals["cost_usd"] = (
+        float(costs.fillna(0).sum()) if costs.notna().sum() == billed_rows else None
+    )
+    total_input = totals["input_tokens"] + totals["cached_input_tokens"] + totals["cache_write_tokens"]
+    totals["cache_hit_rate"] = totals["cached_input_tokens"] / total_input if total_input else 0.0
+    return totals
+
+
 def estimate_cost(
     num_samples: int,
     provider: str,
     model: str,
-    avg_tokens_per_sample: int = 500
+    avg_tokens_per_sample: int = 500,
+    input_tokens_per_sample: float | None = None,
+    output_tokens_per_sample: int = 300,
 ) -> dict:
-    """Estimate the cost of running LLM evaluation."""
+    """Estimate the cost of running LLM evaluation.
+
+    With a measured ``input_tokens_per_sample`` the input side is exact for the prompt;
+    otherwise ``avg_tokens_per_sample`` is split 70/30 between input and output.
+    """
     model_pricing = get_model_pricing(provider, model)
     if model_pricing is None:
         return {"estimated_cost": "Unknown", "warning": "Model pricing not available"}
 
-    total_tokens = num_samples * avg_tokens_per_sample
-    input_tokens = total_tokens * 0.7  # Assume 70% input
-    output_tokens = total_tokens * 0.3  # Assume 30% output
+    if input_tokens_per_sample is not None:
+        input_tokens = num_samples * input_tokens_per_sample
+        output_tokens = num_samples * output_tokens_per_sample
+    else:
+        total_tokens = num_samples * avg_tokens_per_sample
+        input_tokens = total_tokens * 0.7  # Assume 70% input
+        output_tokens = total_tokens * 0.3  # Assume 30% output
+    total_tokens = input_tokens + output_tokens
 
     input_cost = (input_tokens / 1_000_000) * model_pricing["input"]
     output_cost = (output_tokens / 1_000_000) * model_pricing["output"]
