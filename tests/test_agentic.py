@@ -86,6 +86,13 @@ def test_anthropic_bot_returns_text_after_thinking_and_normalized_usage():
     assert messages.kwargs["system"] == "Be strict."
 
 
+def test_anthropic_max_tokens_rejects_partial_text():
+    bot, _ = anthropic_bot([SimpleNamespace(type="text", text="Score: 4\nReason")], stop_reason="max_tokens")
+
+    with pytest.raises(BilledCompletionError, match="max_tokens"):
+        bot.complete([{"role": "user", "content": "Judge"}], max_tokens=10, temperature=0)
+
+
 def test_anthropic_cache_prefix_marks_stable_leading_text():
     bot, messages = anthropic_bot([SimpleNamespace(type="text", text="Pass")])
 

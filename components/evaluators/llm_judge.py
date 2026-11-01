@@ -324,8 +324,14 @@ USAGE_COLUMNS = (
 )
 
 
-def usage_columns(provider: str, model: str, usage: TokenUsage) -> dict:
-    """Flatten one call's usage into per-row result columns."""
+def usage_columns(provider: str, model: str, usage: TokenUsage | None) -> dict:
+    """Flatten one call's usage into per-row result columns.
+
+    A call whose provider reported no usage keeps empty token columns and is flagged,
+    so its cost is unknown instead of $0.
+    """
+    if usage is None:
+        return {**{name: None for name in USAGE_COLUMNS}, "cost_usd": None, "usage_missing": True}
     return {
         **{name: getattr(usage, name) for name in USAGE_COLUMNS},
         "cost_usd": usage_cost(provider, model, usage),
@@ -337,11 +343,18 @@ def summarize_usage(results) -> dict | None:
     if "input_tokens" not in results.columns:
         return None
     totals = {name: int(results[name].fillna(0).sum()) for name in USAGE_COLUMNS}
-    billed_rows = int(results["input_tokens"].notna().sum())
+    reported_rows = int(results["input_tokens"].notna().sum())
+    missing_rows = (
+        int(results["usage_missing"].fillna(False).astype(bool).sum())
+        if "usage_missing" in results.columns
+        else 0
+    )
     costs = results["cost_usd"]
-    totals["billed_calls"] = billed_rows
+    totals["billed_calls"] = reported_rows + missing_rows
     totals["cost_usd"] = (
-        float(costs.fillna(0).sum()) if costs.notna().sum() == billed_rows else None
+        float(costs.fillna(0).sum())
+        if missing_rows == 0 and costs.notna().sum() == reported_rows
+        else None
     )
     total_input = totals["input_tokens"] + totals["cached_input_tokens"] + totals["cache_write_tokens"]
     totals["cache_hit_rate"] = totals["cached_input_tokens"] / total_input if total_input else 0.0

@@ -230,6 +230,19 @@ def test_summarize_usage_reports_unknown_cost_when_any_call_is_unpriced():
     assert summarize_usage(pd.DataFrame([{"score": 1}])) is None
 
 
+def test_missing_provider_usage_makes_cost_unknown_not_zero():
+    evaluator = make_usage_evaluator('{"critique":"Fine.","result":"Pass"}')
+    evaluator.client.usage = None
+    priced = make_usage_evaluator('{"critique":"Fine.","result":"Pass"}')
+
+    results = pd.DataFrame([evaluator.evaluate_single("Answer"), priced.evaluate_single("Answer")])
+    summary = summarize_usage(results)
+
+    assert bool(results.loc[0, "usage_missing"])
+    assert summary["billed_calls"] == 2
+    assert summary["cost_usd"] is None
+
+
 def test_measure_input_tokens_averages_a_sample_of_rendered_prompts():
     evaluator = make_usage_evaluator("{}", "anthropic", "claude-sonnet-5-5")
     evaluator.custom_prompt = "{output}"

@@ -45,8 +45,13 @@ def _count(source: Any, name: str) -> int:
     return value if isinstance(value, int) else 0
 
 
-def usage_from_openai(usage: Any) -> TokenUsage:
-    """Normalize Chat Completions usage, where prompt_tokens includes cached tokens."""
+def usage_from_openai(usage: Any) -> TokenUsage | None:
+    """Normalize Chat Completions usage, where prompt_tokens includes cached tokens.
+
+    Returns None when the response carried no usage, so the cost stays unknown rather than $0.
+    """
+    if usage is None:
+        return None
     prompt_details = getattr(usage, "prompt_tokens_details", None)
     completion_details = getattr(usage, "completion_tokens_details", None)
     cached = _count(prompt_details, "cached_tokens")
@@ -58,8 +63,10 @@ def usage_from_openai(usage: Any) -> TokenUsage:
     )
 
 
-def usage_from_anthropic(usage: Any) -> TokenUsage:
+def usage_from_anthropic(usage: Any) -> TokenUsage | None:
     """Normalize Messages usage, where input_tokens already excludes cache traffic."""
+    if usage is None:
+        return None
     return TokenUsage(
         input_tokens=_count(usage, "input_tokens"),
         cached_input_tokens=_count(usage, "cache_read_input_tokens"),

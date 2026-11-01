@@ -21,7 +21,7 @@ except ImportError:
 class BilledCompletionError(ValueError):
     """A billed provider call that produced no usable text; ``usage`` is what was charged."""
 
-    def __init__(self, message: str, usage: TokenUsage) -> None:
+    def __init__(self, message: str, usage: TokenUsage | None) -> None:
         super().__init__(message)
         self.usage = usage
 
@@ -29,7 +29,7 @@ class BilledCompletionError(ValueError):
 @dataclass(frozen=True)
 class Completion:
     text: str
-    usage: TokenUsage
+    usage: TokenUsage | None
 
 
 class Bot:
@@ -131,8 +131,8 @@ class Bot:
                 (block.text for block in response.content if getattr(block, "type", None) == "text"),
                 None,
             )
-            if content is None and getattr(response, "stop_reason", None) == "max_tokens":
-                raise BilledCompletionError("anthropic reached max_tokens before writing a response", usage)
+            if getattr(response, "stop_reason", None) == "max_tokens":
+                raise BilledCompletionError("anthropic reached max_tokens before completing its response", usage)
         if not isinstance(content, str) or not content.strip():
             raise BilledCompletionError(f"{self.provider} returned an empty completion", usage)
         return Completion(text=content, usage=usage)

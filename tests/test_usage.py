@@ -30,7 +30,8 @@ def test_openai_usage_tolerates_missing_details():
     assert usage_from_openai(SimpleNamespace(prompt_tokens=10, completion_tokens=2)) == TokenUsage(
         input_tokens=10, output_tokens=2
     )
-    assert usage_from_openai(None) == TokenUsage()
+    assert usage_from_openai(None) is None
+    assert usage_from_anthropic(None) is None
 
 
 def test_anthropic_usage_keeps_cache_reads_and_writes_separate():
