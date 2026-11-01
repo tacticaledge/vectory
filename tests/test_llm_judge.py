@@ -7,7 +7,7 @@ if __name__ == "__main__":
 import pytest
 import pandas as pd
 
-from components.agentic import Completion
+from components.agentic import BilledCompletionError, Completion
 from components.evaluators.llm_judge import (
     LLMJudgeEvaluator,
     estimate_cost,
@@ -163,6 +163,21 @@ def test_unparseable_response_still_records_billed_usage():
     assert "invalid output" in result["error"]
     assert result["input_tokens"] == 1000
     assert result["cost_usd"] is not None
+
+
+def test_refused_call_still_records_billed_usage():
+    evaluator = make_usage_evaluator("{}", "anthropic", "claude-sonnet-5-5")
+
+    def refuse(messages, **kwargs):
+        raise BilledCompletionError("declined", TokenUsage(input_tokens=500, output_tokens=20))
+
+    evaluator.client.complete_with_usage = refuse
+
+    result = evaluator.evaluate_single("Answer")
+
+    assert result["error"] == "declined"
+    assert result["input_tokens"] == 500
+    assert result["cost_usd"] == pytest.approx(0.0012)
 
 
 def test_anthropic_cache_prefix_is_custom_prompt_text_before_first_placeholder():

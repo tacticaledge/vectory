@@ -55,8 +55,8 @@ def test_cost_prices_each_token_bucket_at_its_own_rate():
         output_tokens=1_000_000,
     )
 
-    # claude-sonnet-5-5: $2 input, $0.20 cache read, $2.50 cache write, $10 output
-    assert usage_cost("anthropic", "claude-sonnet-5-5", usage) == pytest.approx(14.70)
+    # claude-sonnet-5-5: $2 input, $0.10 cache read, $2.50 cache write, $10 output
+    assert usage_cost("anthropic", "claude-sonnet-5-5", usage) == pytest.approx(14.60)
 
 
 def test_openai_cache_writes_bill_at_input_rate():

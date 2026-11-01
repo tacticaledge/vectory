@@ -372,7 +372,11 @@ st.markdown("<br>", unsafe_allow_html=True)
 section_header("💰 Cost Estimate", style="warning")
 
 num_samples = int(max_samples)
-measure_key = (provider, model, decision_mode, criteria_type, custom_criteria, include_reference, custom_prompt, num_samples)
+measure_key = (
+    provider, model, decision_mode, criteria_type, custom_criteria, include_reference, custom_prompt,
+    num_samples, tuple(mapping_dict.items()),
+    int(pd.util.hash_pandas_object(df.head(num_samples), index=True).sum()),
+)
 measured = st.session_state.get("llm_judge_measured_tokens")
 measured_input = measured["input_tokens_per_sample"] if measured and measured["key"] == measure_key else None
 cost_info = estimate_cost(num_samples, provider, model, input_tokens_per_sample=measured_input)

@@ -86,7 +86,7 @@ ANTHROPIC_MODELS = [
         input_per_million=2.00,
         output_per_million=10.00,
         note="Balanced speed and capability for everyday evaluations.",
-        cached_input_per_million=0.20,
+        cached_input_per_million=0.10,
         cache_write_per_million=2.50,
     ),
     ProviderModel(

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from components.agentic import Bot
+from components.agentic import BilledCompletionError, Bot
 from components.usage import TokenUsage
 
 
@@ -113,11 +113,14 @@ def test_anthropic_cache_prefix_is_ignored_when_prompt_does_not_start_with_it():
     ("stop_reason", "message"),
     [("refusal", "declined"), ("max_tokens", "max_tokens")],
 )
-def test_anthropic_bot_explains_missing_text(stop_reason, message):
-    bot, _ = anthropic_bot([SimpleNamespace(type="thinking", thinking="")], stop_reason=stop_reason)
+def test_anthropic_bot_explains_missing_text_and_keeps_billed_usage(stop_reason, message):
+    usage = SimpleNamespace(input_tokens=30, output_tokens=10)
+    bot, _ = anthropic_bot([SimpleNamespace(type="thinking", thinking="")], stop_reason=stop_reason, usage=usage)
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(BilledCompletionError, match=message) as raised:
         bot.complete([{"role": "user", "content": "Judge"}], max_tokens=10, temperature=0)
+
+    assert raised.value.usage == TokenUsage(input_tokens=30, output_tokens=10)
 
 
 def test_token_counting_is_exact_for_anthropic_and_unavailable_for_openai():

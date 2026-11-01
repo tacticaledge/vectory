@@ -18,6 +18,14 @@ except ImportError:
     anthropic = None
 
 
+class BilledCompletionError(ValueError):
+    """A billed provider call that produced no usable text; ``usage`` is what was charged."""
+
+    def __init__(self, message: str, usage: TokenUsage) -> None:
+        super().__init__(message)
+        self.usage = usage
+
+
 @dataclass(frozen=True)
 class Completion:
     text: str
@@ -116,17 +124,17 @@ class Bot:
                 messages=provider_messages,
                 **({"system": system} if system else {}),
             )
+            usage = usage_from_anthropic(getattr(response, "usage", None))
             if getattr(response, "stop_reason", None) == "refusal":
-                raise ValueError("anthropic declined the request (stop_reason=refusal)")
+                raise BilledCompletionError("anthropic declined the request (stop_reason=refusal)", usage)
             content = next(
                 (block.text for block in response.content if getattr(block, "type", None) == "text"),
                 None,
             )
             if content is None and getattr(response, "stop_reason", None) == "max_tokens":
-                raise ValueError("anthropic reached max_tokens before writing a response")
-            usage = usage_from_anthropic(getattr(response, "usage", None))
+                raise BilledCompletionError("anthropic reached max_tokens before writing a response", usage)
         if not isinstance(content, str) or not content.strip():
-            raise ValueError(f"{self.provider} returned an empty completion")
+            raise BilledCompletionError(f"{self.provider} returned an empty completion", usage)
         return Completion(text=content, usage=usage)
 
     def count_input_tokens(self, messages: list[dict[str, str]]) -> int | None:

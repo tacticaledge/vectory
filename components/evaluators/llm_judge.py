@@ -2,7 +2,7 @@ import re
 import time
 from typing import Literal
 
-from components.agentic import Bot, Completion
+from components.agentic import BilledCompletionError, Bot, Completion
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_pricing
 from components.usage import TokenUsage, usage_cost
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -242,6 +242,13 @@ class LLMJudgeEvaluator(BaseEvaluator):
                 completion = self._call_anthropic(prompt)
             else:
                 return {"score": None, "error": f"Unsupported provider: {self.provider}"}
+        except BilledCompletionError as e:
+            return {
+                "score": None,
+                "reasoning": None,
+                "error": str(e),
+                **usage_columns(self.provider, self.model, e.usage),
+            }
         except Exception as e:
             return {"score": None, "reasoning": None, "error": str(e)}
 
