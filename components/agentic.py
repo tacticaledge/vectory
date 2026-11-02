@@ -118,11 +118,17 @@ class Bot:
         else:
             # Current Claude models reject non-default sampling parameters, so temperature is not sent.
             system, provider_messages = self._anthropic_messages(messages, cache_prefix)
+            output_config = (
+                {"format": {"type": "json_schema", "schema": response_schema}}
+                if response_schema is not None
+                else None
+            )
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
                 messages=provider_messages,
                 **({"system": system} if system else {}),
+                **({"output_config": output_config} if output_config else {}),
             )
             usage = usage_from_anthropic(getattr(response, "usage", None))
             if getattr(response, "stop_reason", None) == "refusal":

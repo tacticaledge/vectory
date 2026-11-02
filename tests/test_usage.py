@@ -34,6 +34,11 @@ def test_openai_usage_tolerates_missing_details():
     assert usage_from_anthropic(None) is None
 
 
+def test_usage_missing_a_core_count_is_unknown():
+    assert usage_from_openai(SimpleNamespace(prompt_tokens=10)) is None
+    assert usage_from_anthropic(SimpleNamespace(output_tokens=5)) is None
+
+
 def test_anthropic_usage_keeps_cache_reads_and_writes_separate():
     usage = SimpleNamespace(
         input_tokens=50,

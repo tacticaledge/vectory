@@ -86,6 +86,23 @@ def test_anthropic_bot_returns_text_after_thinking_and_normalized_usage():
     assert messages.kwargs["system"] == "Be strict."
 
 
+def test_anthropic_response_schema_is_sent_as_output_config():
+    bot, messages = anthropic_bot([SimpleNamespace(type="text", text="{}")])
+    schema = {"type": "object", "additionalProperties": False, "properties": {}}
+
+    bot.complete([{"role": "user", "content": "Judge"}], max_tokens=10, temperature=0, response_schema=schema)
+
+    assert messages.kwargs["output_config"] == {"format": {"type": "json_schema", "schema": schema}}
+
+
+def test_anthropic_request_has_no_output_config_without_schema():
+    bot, messages = anthropic_bot([SimpleNamespace(type="text", text="ok")])
+
+    bot.complete([{"role": "user", "content": "Judge"}], max_tokens=10, temperature=0)
+
+    assert "output_config" not in messages.kwargs
+
+
 def test_anthropic_max_tokens_rejects_partial_text():
     bot, _ = anthropic_bot([SimpleNamespace(type="text", text="Score: 4\nReason")], stop_reason="max_tokens")
 

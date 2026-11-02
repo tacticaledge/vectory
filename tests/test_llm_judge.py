@@ -99,6 +99,15 @@ def test_scale_parser_remains_available_for_legacy_workflows():
     assert parsed["reasoning"] == "Mostly correct"
 
 
+def test_scale_parser_ignores_numbered_list_markers():
+    evaluator = make_evaluator("scale_1_5")
+
+    parsed = evaluator._parse_response("1. Score: 5\n\n2. Reasoning: Correct and direct.")
+
+    assert parsed["score"] == 5
+    assert parsed["reasoning"] == "Correct and direct."
+
+
 def test_custom_prompt_preserves_json_examples_while_replacing_known_placeholders():
     evaluator = make_evaluator()
     evaluator.custom_prompt = 'Example: {"result": "Pass"}\nInput: {input}\nOutput: {output}'
@@ -189,6 +198,15 @@ def test_anthropic_cache_prefix_is_custom_prompt_text_before_first_placeholder()
     messages, kwargs = evaluator.client.calls[0]
     assert kwargs["cache_prefix"] == "Rubric and expert examples.\nInput: "
     assert messages[0]["content"].startswith(kwargs["cache_prefix"])
+
+
+def test_anthropic_binary_judge_requests_the_strict_response_schema():
+    evaluator = make_usage_evaluator('{"critique":"Fine.","result":"Pass"}', "anthropic", "claude-sonnet-5-5")
+
+    evaluator.evaluate_single("Answer")
+
+    schema = evaluator.client.calls[0][1]["response_schema"]
+    assert schema["properties"]["result"]["enum"] == ["Pass", "Fail"]
 
 
 def test_cache_prefix_is_not_used_for_openai_or_default_templates():
