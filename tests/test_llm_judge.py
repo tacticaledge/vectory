@@ -7,7 +7,14 @@ if __name__ == "__main__":
 import pytest
 import pandas as pd
 
-from components.evaluators.llm_judge import LLMJudgeEvaluator, get_result_column
+from components.agentic import BilledCompletionError, Completion
+from components.evaluators.llm_judge import (
+    LLMJudgeEvaluator,
+    estimate_cost,
+    get_result_column,
+    summarize_usage,
+)
+from components.usage import TokenUsage
 
 
 def make_evaluator(decision_mode="binary"):
@@ -68,10 +75,10 @@ def test_openai_binary_call_enforces_json_schema():
         def __init__(self):
             self.kwargs = None
 
-        def complete(self, messages, **kwargs):
+        def complete_with_usage(self, messages, **kwargs):
             self.kwargs = kwargs
             self.messages = messages
-            return '{"critique":"Fine.","result":"Pass"}'
+            return Completion(text='{"critique":"Fine.","result":"Pass"}', usage=TokenUsage())
 
     bot = FakeBot()
     evaluator.client = bot
@@ -112,6 +119,153 @@ def test_all_error_batch_has_safe_empty_verdict_column():
 
     assert len(verdicts) == 1
     assert verdicts.isna().all()
+
+
+class UsageBot:
+    def __init__(self, text, usage):
+        self.text = text
+        self.usage = usage
+        self.calls = []
+
+    def complete_with_usage(self, messages, **kwargs):
+        self.calls.append((messages, kwargs))
+        return Completion(text=self.text, usage=self.usage)
+
+    def count_input_tokens(self, messages):
+        return len(messages[0]["content"])
+
+
+def make_usage_evaluator(text, provider="openai", model="gpt-5-mini"):
+    evaluator = make_evaluator()
+    evaluator.provider = provider
+    evaluator.model = model
+    evaluator.client = UsageBot(text, TokenUsage(input_tokens=1000, cached_input_tokens=0, output_tokens=200))
+    return evaluator
+
+
+def test_evaluate_single_records_token_usage_and_cost():
+    evaluator = make_usage_evaluator('{"critique":"Fine.","result":"Pass"}')
+
+    result = evaluator.evaluate_single("Answer", input_text="Question")
+
+    assert result["verdict"] == "Pass"
+    assert result["input_tokens"] == 1000
+    assert result["output_tokens"] == 200
+    # gpt-5-mini: 1000 * $0.25/M + 200 * $2.00/M
+    assert result["cost_usd"] == pytest.approx(0.00065)
+
+
+def test_unparseable_response_still_records_billed_usage():
+    evaluator = make_usage_evaluator("not json")
+
+    result = evaluator.evaluate_single("Answer")
+
+    assert "invalid output" in result["error"]
+    assert result["input_tokens"] == 1000
+    assert result["cost_usd"] is not None
+
+
+def test_refused_call_still_records_billed_usage():
+    evaluator = make_usage_evaluator("{}", "anthropic", "claude-sonnet-5-5")
+
+    def refuse(messages, **kwargs):
+        raise BilledCompletionError("declined", TokenUsage(input_tokens=500, output_tokens=20))
+
+    evaluator.client.complete_with_usage = refuse
+
+    result = evaluator.evaluate_single("Answer")
+
+    assert result["error"] == "declined"
+    assert result["input_tokens"] == 500
+    assert result["cost_usd"] == pytest.approx(0.0012)
+
+
+def test_anthropic_cache_prefix_is_custom_prompt_text_before_first_placeholder():
+    evaluator = make_usage_evaluator('{"critique":"Fine.","result":"Pass"}', "anthropic", "claude-sonnet-5-5")
+    evaluator.custom_prompt = "Rubric and expert examples.\nInput: {input}\nOutput: {output}"
+
+    evaluator.evaluate_single("Answer", input_text="Question")
+
+    messages, kwargs = evaluator.client.calls[0]
+    assert kwargs["cache_prefix"] == "Rubric and expert examples.\nInput: "
+    assert messages[0]["content"].startswith(kwargs["cache_prefix"])
+
+
+def test_cache_prefix_is_not_used_for_openai_or_default_templates():
+    evaluator = make_usage_evaluator("{}", "anthropic", "claude-sonnet-5-5")
+    assert evaluator._cache_prefix() is None
+    evaluator.provider = "openai"
+    evaluator.custom_prompt = "Rubric {output}"
+    assert evaluator._cache_prefix() is None
+
+
+def test_summarize_usage_totals_cost_and_cache_hit_rate():
+    results = pd.DataFrame(
+        [
+            {"input_tokens": 100, "cached_input_tokens": 0, "cache_write_tokens": 900,
+             "output_tokens": 50, "reasoning_tokens": 10, "cost_usd": 0.01},
+            {"input_tokens": 100, "cached_input_tokens": 900, "cache_write_tokens": 0,
+             "output_tokens": 50, "reasoning_tokens": 0, "cost_usd": 0.002},
+            {"score": None, "error": "network"},
+        ]
+    )
+
+    summary = summarize_usage(results)
+
+    assert summary["billed_calls"] == 2
+    assert summary["cost_usd"] == pytest.approx(0.012)
+    assert summary["output_tokens"] == 100
+    assert summary["cache_hit_rate"] == pytest.approx(0.45)
+
+
+def test_summarize_usage_reports_unknown_cost_when_any_call_is_unpriced():
+    results = pd.DataFrame(
+        [
+            {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_tokens": 0,
+             "output_tokens": 5, "reasoning_tokens": 0, "cost_usd": None},
+        ]
+    )
+
+    assert summarize_usage(results)["cost_usd"] is None
+    assert summarize_usage(pd.DataFrame([{"score": 1}])) is None
+
+
+def test_missing_provider_usage_makes_cost_unknown_not_zero():
+    evaluator = make_usage_evaluator('{"critique":"Fine.","result":"Pass"}')
+    evaluator.client.usage = None
+    priced = make_usage_evaluator('{"critique":"Fine.","result":"Pass"}')
+
+    results = pd.DataFrame([evaluator.evaluate_single("Answer"), priced.evaluate_single("Answer")])
+    summary = summarize_usage(results)
+
+    assert bool(results.loc[0, "usage_missing"])
+    assert summary["billed_calls"] == 2
+    assert summary["cost_usd"] is None
+
+
+def test_measure_input_tokens_averages_a_sample_of_rendered_prompts():
+    evaluator = make_usage_evaluator("{}", "anthropic", "claude-sonnet-5-5")
+    evaluator.custom_prompt = "{output}"
+
+    mean = evaluator.measure_input_tokens(["aa", "aaaa", "aaaaaa"], sample_size=2)
+
+    assert mean == pytest.approx(3.0)
+
+
+def test_estimate_cost_uses_measured_input_tokens():
+    estimate = estimate_cost(10, "anthropic", "claude-sonnet-5-5", input_tokens_per_sample=1000)
+
+    assert estimate["input_tokens"] == 10_000
+    assert estimate["output_tokens"] == 3_000
+    # 10_000 * $2/M + 3_000 * $10/M
+    assert estimate["estimated_cost"] == "$0.0500"
+
+
+def test_anthropic_judge_defaults_to_an_anthropic_model():
+    evaluator = LLMJudgeEvaluator.__new__(LLMJudgeEvaluator)
+    evaluator.provider = "anthropic"
+
+    assert evaluator._default_model().startswith("claude-")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
+
+from components.usage import TokenUsage, usage_from_anthropic, usage_from_openai
 
 try:
     import openai
@@ -13,6 +16,20 @@ try:
     import anthropic
 except ImportError:
     anthropic = None
+
+
+class BilledCompletionError(ValueError):
+    """A billed provider call that produced no usable text; ``usage`` is what was charged."""
+
+    def __init__(self, message: str, usage: TokenUsage | None) -> None:
+        super().__init__(message)
+        self.usage = usage
+
+
+@dataclass(frozen=True)
+class Completion:
+    text: str
+    usage: TokenUsage | None
 
 
 class Bot:
@@ -49,8 +66,33 @@ class Bot:
         temperature: float,
         response_schema: dict[str, Any] | None = None,
         json_mode: bool = False,
+        cache_prefix: str | None = None,
     ) -> str:
         """Return text from one provider while applying the requested output contract."""
+        return self.complete_with_usage(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_schema=response_schema,
+            json_mode=json_mode,
+            cache_prefix=cache_prefix,
+        ).text
+
+    def complete_with_usage(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int,
+        temperature: float,
+        response_schema: dict[str, Any] | None = None,
+        json_mode: bool = False,
+        cache_prefix: str | None = None,
+    ) -> Completion:
+        """Return text plus billed token usage.
+
+        ``cache_prefix`` marks the stable leading text of the last user message as
+        cacheable on Anthropic. OpenAI caches stable prefixes automatically.
+        """
         if self.provider == "openai":
             response_format = None
             if response_schema is not None:
@@ -72,17 +114,63 @@ class Bot:
                 **({"response_format": response_format} if response_format else {}),
             )
             content = response.choices[0].message.content
+            usage = usage_from_openai(getattr(response, "usage", None))
         else:
-            system_parts = [message["content"] for message in messages if message["role"] == "system"]
-            provider_messages = [message for message in messages if message["role"] != "system"]
+            # Current Claude models reject non-default sampling parameters, so temperature is not sent.
+            system, provider_messages = self._anthropic_messages(messages, cache_prefix)
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
-                temperature=temperature,
                 messages=provider_messages,
-                **({"system": "\n\n".join(system_parts)} if system_parts else {}),
+                **({"system": system} if system else {}),
             )
-            content = response.content[0].text
+            usage = usage_from_anthropic(getattr(response, "usage", None))
+            if getattr(response, "stop_reason", None) == "refusal":
+                raise BilledCompletionError("anthropic declined the request (stop_reason=refusal)", usage)
+            content = next(
+                (block.text for block in response.content if getattr(block, "type", None) == "text"),
+                None,
+            )
+            if getattr(response, "stop_reason", None) == "max_tokens":
+                raise BilledCompletionError("anthropic reached max_tokens before completing its response", usage)
         if not isinstance(content, str) or not content.strip():
-            raise ValueError(f"{self.provider} returned an empty completion")
-        return content
+            raise BilledCompletionError(f"{self.provider} returned an empty completion", usage)
+        return Completion(text=content, usage=usage)
+
+    def count_input_tokens(self, messages: list[dict[str, str]]) -> int | None:
+        """Return the exact input token count where the provider exposes one, else None."""
+        if self.provider != "anthropic":
+            return None
+        system, provider_messages = self._anthropic_messages(messages, None)
+        result = self.client.messages.count_tokens(
+            model=self.model,
+            messages=provider_messages,
+            **({"system": system} if system else {}),
+        )
+        return result.input_tokens
+
+    @staticmethod
+    def _anthropic_messages(
+        messages: list[dict[str, str]], cache_prefix: str | None
+    ) -> tuple[str, list[dict[str, Any]]]:
+        system_parts = [message["content"] for message in messages if message["role"] == "system"]
+        provider_messages: list[dict[str, Any]] = [
+            message for message in messages if message["role"] != "system"
+        ]
+        last = provider_messages[-1] if provider_messages else None
+        if (
+            cache_prefix
+            and last is not None
+            and last["role"] == "user"
+            and isinstance(last["content"], str)
+            and last["content"].startswith(cache_prefix)
+            and len(last["content"]) > len(cache_prefix)
+        ):
+            provider_messages[-1] = {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": last["content"][len(cache_prefix):]},
+                ],
+            }
+        return "\n\n".join(system_parts), provider_messages
