@@ -37,7 +37,7 @@ python-Levenshtein>=0.25.0  # Fast Levenshtein distance
 # LLM API Clients
 # -----------------------------------------------------------------------------
 openai>=1.40.0              # OpenAI API (GPT-4, etc.)
-anthropic>=0.34.0           # Anthropic API
+anthropic>=0.77.0           # Anthropic API, structured outputs via output_config
 
 # -----------------------------------------------------------------------------
 # Scientific Computing

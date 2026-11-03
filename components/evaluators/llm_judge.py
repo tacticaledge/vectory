@@ -195,8 +195,8 @@ class LLMJudgeEvaluator(BaseEvaluator):
         for line in lines:
             line_lower = line.lower()
             if "score:" in line_lower:
-                # Extract number from the line
-                numbers = re.findall(r'\d+', line)
+                # Read the number after "Score:", not a list marker such as "1. Score: 5"
+                numbers = re.findall(r'\d+', line[line_lower.index("score:"):])
                 if numbers:
                     score = int(numbers[0])
                     result["score"] = min(max(score, 1), 5)  # Clamp to 1-5
@@ -211,16 +211,15 @@ class LLMJudgeEvaluator(BaseEvaluator):
 
         return result
 
+    def _response_schema(self) -> dict | None:
+        return BinaryJudgeResponse.model_json_schema() if self.decision_mode == "binary" else None
+
     def _call_openai(self, prompt: str) -> Completion:
         return self.client.complete_with_usage(
             [{"role": "user", "content": prompt}],
             max_tokens=500,
             temperature=0.3,
-            response_schema=(
-                BinaryJudgeResponse.model_json_schema()
-                if self.decision_mode == "binary"
-                else None
-            ),
+            response_schema=self._response_schema(),
         )
 
     def _call_anthropic(self, prompt: str) -> Completion:
@@ -229,6 +228,7 @@ class LLMJudgeEvaluator(BaseEvaluator):
             [{"role": "user", "content": prompt}],
             max_tokens=4000,
             temperature=0.3,
+            response_schema=self._response_schema(),
             cache_prefix=self._cache_prefix(),
         )
 
