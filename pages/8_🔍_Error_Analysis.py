@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from components.models import init_session_state, ColumnMapping, DataSourceType
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_ids, get_model_label
 from components.error_discovery import generate_taxonomy_suggestions
-from components.provider_config import get_provider_api_key
+from components.provider_ui import PROVIDERS, provider_credentials, provider_label
 from components.eval_workflow import (
     build_evaluator_definition,
     build_review_bundle,
@@ -38,16 +38,6 @@ from components.ui import (
     display_lottie,
 )
 
-
-def get_api_key(provider: str) -> str:
-    """Get provider API key from session state or environment."""
-    key_map = {"openai": "openai_api_key", "anthropic": "anthropic_api_key"}
-    session_key = key_map.get(provider)
-    if not session_key:
-        return ""
-    if st.session_state.get(session_key):
-        return st.session_state[session_key]
-    return get_provider_api_key(provider)
 
 st.set_page_config(
     page_title="Error Analysis | Vectory",
@@ -210,7 +200,7 @@ with st.sidebar:
             help="Mixes cluster representatives with random exploration records.",
         )
         discovery_seed = st.number_input("Sampling seed", min_value=0, value=42)
-        if st.button("Regenerate diverse sample", use_container_width=True):
+        if st.button("Regenerate diverse sample", width="stretch"):
             st.session_state.discovery_samples = select_diverse_samples(
                 records,
                 sample_size=int(requested_sample_size),
@@ -334,7 +324,7 @@ if phase == "📖 Open Coding":
     col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
     with col1:
         previous_disabled = sample_position == 0 if nav_mode == "Diverse Sample" else idx == 0
-        if st.button("← Prev", use_container_width=True, disabled=previous_disabled):
+        if st.button("← Prev", width="stretch", disabled=previous_disabled):
             if nav_mode == "Diverse Sample":
                 st.session_state.discovery_sample_position = max(0, sample_position - 1)
             else:
@@ -346,7 +336,7 @@ if phase == "📖 Open Coding":
             if nav_mode == "Diverse Sample"
             else idx >= total - 1
         )
-        if st.button("Next →", use_container_width=True, disabled=next_disabled):
+        if st.button("Next →", width="stretch", disabled=next_disabled):
             if nav_mode == "Diverse Sample":
                 st.session_state.discovery_sample_position = min(
                     len(sample_indices) - 1,
@@ -367,7 +357,7 @@ if phase == "📖 Open Coding":
         else:
             jump = st.number_input("Jump to trace #", 1, total, idx + 1, label_visibility="collapsed")
     with col4:
-        if st.button("Go", use_container_width=True):
+        if st.button("Go", width="stretch"):
             if nav_mode == "Diverse Sample":
                 st.session_state.discovery_sample_position = jump - 1
             else:
@@ -481,7 +471,7 @@ if phase == "📖 Open Coding":
     # Save button
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
-        if st.button("💾 Save & Next", type="primary", use_container_width=True):
+        if st.button("💾 Save & Next", type="primary", width="stretch"):
             if not st.session_state.principal_reviewer_name.strip():
                 st.error("Identify the principal domain expert in the Discovery Sample sidebar first.")
             elif not open_code.strip():
@@ -513,7 +503,7 @@ if phase == "📖 Open Coding":
                     st.rerun()
 
     with col2:
-        if idx in annotations and st.button("🗑️ Clear", use_container_width=True):
+        if idx in annotations and st.button("🗑️ Clear", width="stretch"):
             del annotations[idx]
             st.session_state.trace_annotations = annotations
             st.rerun()
@@ -601,7 +591,7 @@ elif phase == "🔗 Axial Coding":
                                 "Added to review queue" if already_selected else "Add to review queue",
                                 key=f"queue_related_{name}_{candidate_idx}",
                                 disabled=already_selected,
-                                use_container_width=True,
+                                width="stretch",
                             ):
                                 st.session_state.discovery_samples.append(
                                     {
@@ -659,14 +649,15 @@ elif phase == "🔗 Axial Coding":
     with c1:
         suggestion_provider = st.selectbox(
             "Provider",
-            ["openai", "anthropic"],
+            PROVIDERS,
+            format_func=provider_label,
             key="taxonomy_provider",
             help="Select the LLM provider for taxonomy suggestions",
         )
     with c2:
         model_options = get_model_ids(suggestion_provider)
         if not model_options:
-            st.warning(f"No public model catalog entries are configured for {suggestion_provider.title()}.")
+            st.warning(f"No public model catalog entries are configured for {provider_label(suggestion_provider)}.")
             st.stop()
 
         default_model = DEFAULT_MODEL_BY_PROVIDER.get(suggestion_provider, model_options[0])
@@ -679,29 +670,17 @@ elif phase == "🔗 Axial Coding":
             help="Select the model for clustering open-code notes",
         )
     with c3:
-        default_key = get_api_key(suggestion_provider)
-        if default_key:
-            st.success(f"✓ {suggestion_provider.title()} API key loaded")
-            suggestion_api_key = default_key
-        else:
-            suggestion_api_key = st.text_input(
-                "API Key",
-                type="password",
-                placeholder=f"Enter your {suggestion_provider.title()} API key",
-                key=f"taxonomy_{suggestion_provider}_api_key",
-            )
-            if suggestion_api_key:
-                st.session_state[f"{suggestion_provider}_api_key"] = suggestion_api_key
+        suggestion_credentials = provider_credentials(st, suggestion_provider, key_prefix="taxonomy")
 
     button_col, info_col = st.columns([1, 2])
     with button_col:
-        generate_disabled = not suggestion_api_key or len(open_codes) < 2
+        generate_disabled = not suggestion_credentials.ready or len(open_codes) < 2
         if st.button(
             "Generate Suggestions",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=generate_disabled,
-            help="Requires at least two failure notes and an API key",
+            help="Requires at least two failure notes and provider credentials",
         ):
             try:
                 with st.spinner("Clustering failure notes..."):
@@ -709,8 +688,9 @@ elif phase == "🔗 Axial Coding":
                         open_codes=open_codes,
                         existing_failure_modes=failure_modes,
                         provider=suggestion_provider,
-                        api_key=suggestion_api_key,
+                        api_key=suggestion_credentials.api_key,
                         model=suggestion_model,
+                        aws_region=suggestion_credentials.aws_region,
                     )
                 st.success(f"Generated {len(st.session_state.taxonomy_suggestions)} suggestions")
             except Exception as e:
@@ -740,7 +720,7 @@ elif phase == "🔗 Axial Coding":
 
                 accept_col, dismiss_col = st.columns(2)
                 with accept_col:
-                    if st.button("Accept", key=f"accept_taxonomy_{i}", use_container_width=True):
+                    if st.button("Accept", key=f"accept_taxonomy_{i}", width="stretch"):
                         failure_modes[name] = {
                             "description": suggestion.get("description", ""),
                             "examples": examples,
@@ -754,7 +734,7 @@ elif phase == "🔗 Axial Coding":
                         st.success(f"Added: {name}")
                         st.rerun()
                 with dismiss_col:
-                    if st.button("Dismiss", key=f"dismiss_taxonomy_{i}", use_container_width=True):
+                    if st.button("Dismiss", key=f"dismiss_taxonomy_{i}", width="stretch"):
                         st.session_state.dismissed_taxonomy_suggestions.append(
                             {**suggestion, "dismissed_at": datetime.now().isoformat()}
                         )
@@ -819,7 +799,7 @@ else:  # Taxonomy Dashboard
                 for mode, count in mode_counts.most_common()
             ])
 
-            st.dataframe(mode_df, use_container_width=True, hide_index=True)
+            st.dataframe(mode_df, width="stretch", hide_index=True)
 
             # Bar chart
             import plotly.express as px
@@ -838,7 +818,7 @@ else:  # Taxonomy Dashboard
                 font_color=theme.text_primary,
                 showlegend=False,
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("Tag failures with failure modes in Open Coding to see distribution.")
 
@@ -864,7 +844,7 @@ else:  # Taxonomy Dashboard
         grouped_dimensions["Failure Rate"] = grouped_dimensions["Failure Rate"].map(
             lambda value: f"{value * 100:.1f}%"
         )
-        st.dataframe(grouped_dimensions, use_container_width=True, hide_index=True)
+        st.dataframe(grouped_dimensions, width="stretch", hide_index=True)
         st.caption(
             "Descriptive results for reviewed records only. If these records came from diverse or targeted "
             "sampling, the rates are not production prevalence estimates."
@@ -1013,7 +993,7 @@ else:  # Taxonomy Dashboard
             "📄 Download Annotations (JSON)",
             json.dumps(export_annotations, indent=2, default=str),
             "trace_annotations.json",
-            use_container_width=True,
+            width="stretch",
         )
 
     with col2:
@@ -1021,7 +1001,7 @@ else:  # Taxonomy Dashboard
             "📂 Download Taxonomy (JSON)",
             json.dumps(failure_modes, indent=2, default=str),
             "failure_taxonomy.json",
-            use_container_width=True,
+            width="stretch",
         )
 
     with col3:
@@ -1042,7 +1022,7 @@ else:  # Taxonomy Dashboard
             "📊 Download Report (JSON)",
             json.dumps(report, indent=2, default=str),
             "error_analysis_report.json",
-            use_container_width=True,
+            width="stretch",
         )
 
     with col4:
@@ -1068,7 +1048,7 @@ else:  # Taxonomy Dashboard
             "📦 Download Review Bundle",
             json.dumps(review_bundle, indent=2, default=str),
             "vectory_review_bundle.json",
-            use_container_width=True,
+            width="stretch",
             help="Portable dataset, sample rationale, annotations, taxonomy, suggestions, and draft evaluators.",
         )
 
@@ -1090,7 +1070,7 @@ else:  # Taxonomy Dashboard
                 })
 
         failure_df = pd.DataFrame(failure_data)
-        st.dataframe(failure_df, use_container_width=True, hide_index=True)
+        st.dataframe(failure_df, width="stretch", hide_index=True)
 
 
 # Sidebar - Import/Reset

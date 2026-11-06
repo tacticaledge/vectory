@@ -147,6 +147,53 @@ def test_anthropic_bot_explains_missing_text_and_keeps_billed_usage(stop_reason,
     assert raised.value.usage == TokenUsage(input_tokens=30, output_tokens=10)
 
 
+def test_bedrock_bot_uses_messages_api_and_has_no_token_counting():
+    response = SimpleNamespace(content=[SimpleNamespace(type="text", text="Pass")], stop_reason="end_turn", usage=None)
+    messages = AnthropicMessages(response)
+    bot = Bot(
+        provider="bedrock",
+        api_key=None,
+        model="us.anthropic.claude-haiku-5-5",
+        client=SimpleNamespace(messages=messages),
+    )
+
+    assert bot.complete([{"role": "user", "content": "Judge"}], max_tokens=10, temperature=0.3) == "Pass"
+    assert "temperature" not in messages.kwargs
+    assert bot.count_input_tokens([{"role": "user", "content": "Judge"}]) is None
+
+
+def test_bedrock_client_uses_explicit_region_then_environment(monkeypatch):
+    import anthropic
+
+    created = {}
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace())
+    monkeypatch.setattr(anthropic, "AnthropicBedrock", lambda **kwargs: created.update(kwargs) or "client")
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
+
+    Bot(provider="bedrock", api_key=None, model="m")
+    assert created == {"aws_region": "us-west-2"}
+
+    Bot(provider="bedrock", api_key=None, model="m", aws_region="us-east-2")
+    assert created == {"aws_region": "us-east-2"}
+
+
+def test_bedrock_client_requires_a_region(monkeypatch):
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace())
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    with pytest.raises(ValueError, match="AWS region"):
+        Bot(provider="bedrock", api_key=None, model="m")
+
+
+def test_bedrock_client_explains_missing_boto3(monkeypatch):
+    monkeypatch.setitem(sys.modules, "boto3", None)
+
+    with pytest.raises(ImportError, match=r"vectoryai\[bedrock\]"):
+        Bot(provider="bedrock", api_key=None, model="m", aws_region="us-east-1")
+
+
 def test_token_counting_is_exact_for_anthropic_and_unavailable_for_openai():
     bot, messages = anthropic_bot([])
     assert bot.count_input_tokens([{"role": "user", "content": "Judge"}]) == 42

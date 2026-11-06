@@ -19,6 +19,11 @@ def test_provider_settings_load_and_hide_environment_secrets():
     assert "openai-secret" not in repr(settings)
 
 
+def test_bedrock_region_prefers_aws_region_over_default():
+    assert ProviderSettings(aws_region="us-east-2", aws_default_region="us-west-2").bedrock_region() == "us-east-2"
+    assert ProviderSettings(aws_region=None, aws_default_region="us-west-2").bedrock_region() == "us-west-2"
+
+
 if __name__ == "__main__":
     from tests.utils import pytest_this_file
 

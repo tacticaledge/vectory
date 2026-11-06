@@ -7,8 +7,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from components.models import init_session_state
-from components.model_catalog import get_provider_models
+from components.model_catalog import BEDROCK_REGIONS, PROVIDER_LABELS, get_provider_models
 from components.provider_config import get_provider_api_key
+from components.provider_ui import default_bedrock_region
 from components.themes import THEMES, get_theme, get_theme_css
 from components.ui import sidebar_logo
 
@@ -108,6 +109,26 @@ with col2:
             st.success("Anthropic API key saved to session")
 
 st.markdown(f"""
+<div style="background: {current_theme.bg_card}; border: 1px solid {current_theme.border}; border-radius: 12px; padding: 20px; margin: 16px 0;">
+    <h4 style="margin: 0 0 12px 0; color: {current_theme.text_primary}; font-family: 'DM Sans', sans-serif;">
+        Amazon Bedrock
+    </h4>
+    <p style="color: {current_theme.text_muted}; font-size: 0.85rem; margin-bottom: 0;">
+        Runs Claude models through your AWS account. No API key is stored: requests are signed with your
+        AWS credentials (AWS_PROFILE, SSO login, or environment). Install with
+        <code style="background: {current_theme.code_bg}; padding: 2px 6px; border-radius: 4px;">pip install 'vectoryai[bedrock]'</code>.
+    </p>
+</div>
+""", unsafe_allow_html=True)
+default_region = default_bedrock_region(st)
+st.session_state.aws_region = st.selectbox(
+    "AWS Region for Amazon Bedrock",
+    BEDROCK_REGIONS,
+    index=BEDROCK_REGIONS.index(default_region),
+    key="bedrock_region_input",
+)
+
+st.markdown(f"""
 <p style="color: {current_theme.text_muted}; font-size: 0.8rem; margin-top: 8px;">
     💡 <strong>Tip:</strong> For persistent local development storage, create <code style="background: {current_theme.code_bg}; padding: 2px 6px; border-radius: 4px;">.streamlit/secrets.toml</code> with your keys. Do not commit that file.
 </p>
@@ -172,10 +193,9 @@ st.markdown(f"""
 </p>
 """, unsafe_allow_html=True)
 
-catalog_col1, catalog_col2 = st.columns(2)
-for provider, column in [("openai", catalog_col1), ("anthropic", catalog_col2)]:
+catalog_columns = st.columns(len(PROVIDER_LABELS))
+for (provider, provider_label), column in zip(PROVIDER_LABELS.items(), catalog_columns):
     with column:
-        provider_label = "OpenAI" if provider == "openai" else "Anthropic"
         model_rows = []
         for model in get_provider_models(provider):
             model_rows.append(f"""
@@ -255,7 +275,7 @@ with col1:
             f"{'✓ Active' if is_selected else 'Apply'} ",
             key=f"theme_{theme_name}",
             disabled=is_selected,
-            use_container_width=True
+            width="stretch"
         ):
             st.session_state.theme = theme_name
             st.rerun()

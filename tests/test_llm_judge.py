@@ -23,6 +23,7 @@ def make_evaluator(decision_mode="binary"):
     evaluator.custom_prompt = None
     evaluator.criteria = "The response must answer the request without inventing facts."
     evaluator.include_reference = True
+    evaluator.result_cache = None
     return evaluator
 
 
@@ -259,6 +260,93 @@ def test_missing_provider_usage_makes_cost_unknown_not_zero():
     assert bool(results.loc[0, "usage_missing"])
     assert summary["billed_calls"] == 2
     assert summary["cost_usd"] is None
+
+
+def test_identical_prompt_reuses_the_earlier_verdict_without_a_new_call():
+    evaluator = make_usage_evaluator('{"critique":"Fine.","result":"Pass"}')
+    evaluator.result_cache = {}
+
+    first = evaluator.evaluate_single("Answer", input_text="Question")
+    second = evaluator.evaluate_single("Answer", input_text="Question")
+    different = evaluator.evaluate_single("Other answer", input_text="Question")
+
+    assert len(evaluator.client.calls) == 2
+    assert first["cost_usd"] is not None and "reused" not in first
+    assert second["reused"] is True and second["verdict"] == "Pass"
+    assert "cost_usd" not in second
+    assert "reused" not in different
+
+
+def test_reuse_is_scoped_to_the_model_and_skips_failed_calls():
+    cache = {}
+    failing = make_usage_evaluator("not json")
+    failing.result_cache = cache
+    failing.evaluate_single("Answer")
+    assert cache == {}
+
+    evaluator = make_usage_evaluator('{"critique":"Fine.","result":"Pass"}')
+    evaluator.result_cache = cache
+    evaluator.evaluate_single("Answer")
+    evaluator.model = "gpt-5-nano"
+    evaluator.evaluate_single("Answer")
+
+    assert len(evaluator.client.calls) == 2
+
+
+def test_reuse_cache_drops_oldest_verdicts_beyond_its_bound(monkeypatch):
+    import components.evaluators.llm_judge as llm_judge
+
+    monkeypatch.setattr(llm_judge, "MAX_REUSED_RESULTS", 2)
+    evaluator = make_usage_evaluator('{"critique":"Fine.","result":"Pass"}')
+    evaluator.result_cache = {}
+
+    for output in ["a", "b", "c"]:
+        evaluator.evaluate_single(output)
+
+    assert len(evaluator.result_cache) == 2
+    evaluator.evaluate_single("a")
+    assert len(evaluator.client.calls) == 4
+
+
+def test_summary_counts_reused_rows_without_making_cost_unknown():
+    results = pd.DataFrame(
+        [
+            {"verdict": "Pass", "input_tokens": 100, "cached_input_tokens": 0, "cache_write_tokens": 0,
+             "output_tokens": 10, "reasoning_tokens": 0, "cost_usd": 0.001},
+            {"verdict": "Pass", "reused": True},
+        ]
+    )
+
+    summary = summarize_usage(results)
+
+    assert summary["billed_calls"] == 1
+    assert summary["reused_results"] == 1
+    assert summary["cost_usd"] == pytest.approx(0.001)
+
+
+def test_summary_of_a_fully_reused_run_is_zero_cost():
+    results = pd.DataFrame([{"verdict": "Pass", "reused": True}, {"verdict": "Fail", "reused": True}])
+
+    summary = summarize_usage(results)
+
+    assert summary["billed_calls"] == 0
+    assert summary["reused_results"] == 2
+    assert summary["cost_usd"] == 0.0
+
+
+def test_bedrock_judge_uses_the_messages_api_path_and_bedrock_prices():
+    evaluator = make_usage_evaluator(
+        '{"critique":"Fine.","result":"Pass"}', "bedrock", "us.anthropic.claude-sonnet-5-5"
+    )
+    evaluator.custom_prompt = "Rubric {output}"
+
+    result = evaluator.evaluate_single("Answer")
+
+    _, kwargs = evaluator.client.calls[0]
+    assert kwargs["max_tokens"] == 4000
+    assert kwargs["cache_prefix"] == "Rubric "
+    # Bedrock US profile: 1000 * $2.20/M + 200 * $11/M
+    assert result["cost_usd"] == pytest.approx(0.0044)
 
 
 def test_measure_input_tokens_averages_a_sample_of_rendered_prompts():

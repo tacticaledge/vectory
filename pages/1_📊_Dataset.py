@@ -143,7 +143,7 @@ if st.session_state.dataset is not None:
     tab1, tab2, tab3 = st.tabs(["📋 Preview", "🎯 Column Mapping", "📊 Statistics"])
 
     with tab1:
-        st.dataframe(df.head(15), use_container_width=True, height=400)
+        st.dataframe(df.head(15), width="stretch", height=400)
         if st.button("🗑️ Clear Dataset", type="secondary"):
             st.session_state.dataset = None
             st.session_state.dataset_filename = None
