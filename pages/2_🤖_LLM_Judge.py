@@ -44,7 +44,7 @@ st.markdown(f"""
     🤖 LLM-as-Judge Evaluation
 </h1>
 <p style="font-family: 'DM Sans', sans-serif; color: {theme.text_muted}; font-size: 1rem; margin-top: -10px;">
-    <span style="color: {theme.terminal};">$</span> use current OpenAI or Anthropic models to evaluate your outputs
+    <span style="color: {theme.terminal};">$</span> use current OpenAI, Anthropic, or Amazon Bedrock models to evaluate your outputs
 </p>
 """, unsafe_allow_html=True)
 
