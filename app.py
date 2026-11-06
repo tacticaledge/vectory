@@ -103,7 +103,7 @@ with col2:
     feature_card(
         "🤖",
         "LLM-as-Judge",
-        "Use current OpenAI or Anthropic models to evaluate output quality.",
+        "Use current OpenAI, Anthropic, or Amazon Bedrock models to evaluate output quality.",
         delay=2
     )
 
