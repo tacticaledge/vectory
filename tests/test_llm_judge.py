@@ -308,6 +308,19 @@ def test_reuse_is_scoped_to_the_model_and_skips_failed_calls():
     assert len(evaluator.client.calls) == 2
 
 
+def test_scale_reply_without_a_score_is_not_reused():
+    evaluator = make_usage_evaluator("I cannot rate this.")
+    evaluator.decision_mode = "scale_1_5"
+    evaluator.result_cache = {}
+
+    first = evaluator.evaluate_single("Answer")
+    evaluator.evaluate_single("Answer")
+
+    assert first["score"] is None
+    assert evaluator.result_cache == {}
+    assert len(evaluator.client.calls) == 2
+
+
 def test_reuse_cache_drops_oldest_verdicts_beyond_its_bound(monkeypatch):
     import components.evaluators.llm_judge as llm_judge
 

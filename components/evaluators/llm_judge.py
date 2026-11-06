@@ -287,7 +287,8 @@ class LLMJudgeEvaluator(BaseEvaluator):
             result = self._parse_response(completion.text)
         except Exception as e:
             return {"score": None, "reasoning": None, "error": str(e), **usage_fields}
-        if result_key is not None:
+        # Only verdicts with a score are reused; a 1-5 reply without one is retried next run.
+        if result_key is not None and result.get("score") is not None:
             self._remember(result_key, result)
         return {**result, **usage_fields}
 
