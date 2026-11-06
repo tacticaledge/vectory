@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from components.provider_config import get_bedrock_region
 from components.usage import TokenUsage, usage_from_anthropic, usage_from_openai
 
 try:
@@ -42,11 +43,13 @@ class Bot:
         api_key: str | None,
         model: str,
         client: Any | None = None,
+        aws_region: str | None = None,
     ) -> None:
-        if provider not in {"openai", "anthropic"}:
+        if provider not in {"openai", "anthropic", "bedrock"}:
             raise ValueError(f"Unsupported provider: {provider}")
         self.provider = provider
         self.model = model
+        self.aws_region = aws_region
         self.client = client or self._create_client(api_key)
 
     def _create_client(self, api_key: str | None) -> Any:
@@ -56,6 +59,16 @@ class Bot:
             return openai.OpenAI(api_key=api_key)
         if anthropic is None:
             raise ImportError("anthropic package not installed")
+        if self.provider == "bedrock":
+            # Claude on Bedrock speaks the Messages API and signs with the standard AWS credential chain.
+            try:
+                import boto3  # noqa: F401
+            except ImportError as error:
+                raise ImportError("Amazon Bedrock needs boto3: pip install 'vectoryai[bedrock]'") from error
+            region = self.aws_region or get_bedrock_region()
+            if not region:
+                raise ValueError("Amazon Bedrock needs an AWS region (set AWS_REGION)")
+            return anthropic.AnthropicBedrock(aws_region=region)
         return anthropic.Anthropic(api_key=api_key)
 
     def complete(
@@ -144,7 +157,10 @@ class Bot:
         return Completion(text=content, usage=usage)
 
     def count_input_tokens(self, messages: list[dict[str, str]]) -> int | None:
-        """Return the exact input token count where the provider exposes one, else None."""
+        """Return the exact input token count where the provider exposes one, else None.
+
+        The Anthropic SDK's Bedrock client does not support token counting.
+        """
         if self.provider != "anthropic":
             return None
         system, provider_messages = self._anthropic_messages(messages, None)

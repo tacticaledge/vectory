@@ -102,15 +102,63 @@ ANTHROPIC_MODELS = [
 ]
 
 
+# Claude on Amazon Bedrock through US cross-region inference profiles. These bill at
+# Bedrock's regional rate, 1.1x the global rate, and are the same in all BEDROCK_REGIONS.
+# Source: AWS Price List API (AmazonBedrockFoundationModels), November 2026.
+BEDROCK_MODELS = [
+    ProviderModel(
+        provider="bedrock",
+        model_id="us.anthropic.claude-opus-5-5",
+        label="Claude Opus 5.5 (Bedrock)",
+        input_per_million=4.40,
+        output_per_million=22.00,
+        note="Most capable Opus model for demanding judgments.",
+        cached_input_per_million=0.22,
+        cache_write_per_million=5.50,
+    ),
+    ProviderModel(
+        provider="bedrock",
+        model_id="us.anthropic.claude-sonnet-5-5",
+        label="Claude Sonnet 5.5 (Bedrock)",
+        input_per_million=2.20,
+        output_per_million=11.00,
+        note="Balanced speed and capability for everyday evaluations.",
+        cached_input_per_million=0.11,
+        cache_write_per_million=2.75,
+    ),
+    ProviderModel(
+        provider="bedrock",
+        model_id="us.anthropic.claude-haiku-5-5",
+        label="Claude Haiku 5.5 (Bedrock)",
+        input_per_million=0.11,
+        output_per_million=0.55,
+        note="Fastest low-cost option; prices apply to prompts up to 100K tokens.",
+        cached_input_per_million=0.011,
+        cache_write_per_million=0.1375,
+    ),
+]
+
+BEDROCK_REGIONS = ("us-east-1", "us-east-2", "us-west-2")
+
+
+PROVIDER_LABELS = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "bedrock": "Amazon Bedrock",
+}
+
+
 MODELS_BY_PROVIDER = {
     "openai": OPENAI_MODELS,
     "anthropic": ANTHROPIC_MODELS,
+    "bedrock": BEDROCK_MODELS,
 }
 
 
 DEFAULT_MODEL_BY_PROVIDER = {
     "openai": "gpt-5-mini",
     "anthropic": "claude-opus-5-5",
+    "bedrock": "us.anthropic.claude-opus-5-5",
 }
 
 

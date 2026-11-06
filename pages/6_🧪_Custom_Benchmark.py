@@ -459,7 +459,7 @@ with tab1:
                 <div class="cb-muted">First rows from the uploaded data. Confirm the shape before mapping columns.</div>
             </div>
             """, unsafe_allow_html=True)
-            st.dataframe(df.head(10), use_container_width=True)
+            st.dataframe(df.head(10), width="stretch")
 
             _section("Column mapping", "Confirm the fields Vectory should use for inputs, labels, and expected answers.")
 
@@ -620,8 +620,8 @@ with tab2:
                     'pip install -e ".[embedding]"',
                     language="bash",
                 )
-            st.button("Run benchmark", type="primary", use_container_width=True, disabled=True)
-        elif st.button("Run benchmark", type="primary", use_container_width=True):
+            st.button("Run benchmark", type="primary", width="stretch", disabled=True)
+        elif st.button("Run benchmark", type="primary", width="stretch"):
             # Import EmbeddingModel for creating model objects
             from components.models import EmbeddingModel
 
@@ -710,7 +710,7 @@ with tab3:
             results.style.format({"mean_score": "{:.3f}"}).background_gradient(
                 subset=["mean_score"], cmap="RdYlGn"
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -731,7 +731,7 @@ with tab3:
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         # Score bars for each model
         st.markdown(f"""
@@ -753,12 +753,12 @@ with tab3:
                 "Download CSV",
                 results.to_csv(index=False),
                 "benchmark_results.csv",
-                use_container_width=True,
+                width="stretch",
             )
         with c2:
             st.download_button(
                 "Download JSON",
                 results.to_json(orient="records", indent=2),
                 "benchmark_results.json",
-                use_container_width=True,
+                width="stretch",
             )

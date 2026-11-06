@@ -273,7 +273,7 @@ def _download_json(label, payload, filename):
         json.dumps(payload, indent=2),
         filename,
         "application/json",
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -354,7 +354,7 @@ with tab1:
             '<div class="vb-table-note">Filtered manifest view. Select a task on the right for criteria and pressure details.</div>',
             unsafe_allow_html=True,
         )
-        st.dataframe(pd.DataFrame(task_rows), use_container_width=True, height=330, hide_index=True)
+        st.dataframe(pd.DataFrame(task_rows), width="stretch", height=330, hide_index=True)
 
     with right:
         selected_task_id = st.selectbox(
@@ -616,7 +616,7 @@ with tab3:
                         "agent_control_index": "{:.3f}",
                     }
                 ),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
         with report_right:
@@ -643,12 +643,12 @@ with tab3:
                 margin=dict(l=10, r=10, t=48, b=70),
                 legend_title_text="Agent",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with st.expander("Run scores", expanded=False):
             st.dataframe(
                 score_df.style.format({"vectory_score": "{:.3f}", "pathology_risk": "{:.3f}"}),
-                use_container_width=True,
+                width="stretch",
                 height=360,
                 hide_index=True,
             )
@@ -659,7 +659,7 @@ with tab3:
             else:
                 st.dataframe(
                     proof_df.style.format({"proof_grounding": "{:.3f}"}),
-                    use_container_width=True,
+                    width="stretch",
                     height=260,
                     hide_index=True,
                 )
@@ -668,19 +668,19 @@ with tab3:
             if checkpoint_df.empty:
                 st.info("No checkpoint events were submitted. Add `checkpoint`, `snapshot`, or `progress` events to show score movement over time.")
             else:
-                st.dataframe(checkpoint_df, use_container_width=True, height=260, hide_index=True)
+                st.dataframe(checkpoint_df, width="stretch", height=260, hide_index=True)
                 if "wall_time_seconds" in checkpoint_df.columns and "checkpoint_score" in checkpoint_df.columns:
                     chart_df = checkpoint_df.dropna(subset=["wall_time_seconds", "checkpoint_score"])
                     if not chart_df.empty:
                         fig = px.line(chart_df, x="wall_time_seconds", y="checkpoint_score", color="run_id", markers=True, title="Checkpoint Score Timeline")
                         fig.update_layout(yaxis_range=[0, 1], plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width="stretch")
 
         with st.expander("Claim-to-evidence table", expanded=not claim_evidence_df.empty):
             if claim_evidence_df.empty:
                 st.info("No run-level claims were submitted.")
             else:
-                st.dataframe(claim_evidence_df, use_container_width=True, height=280, hide_index=True)
+                st.dataframe(claim_evidence_df, width="stretch", height=280, hide_index=True)
 
         with st.expander("Report bundle artifacts", expanded=False):
             st.markdown("The open-source CLI can write an inspectable bundle with `index.html`, `scores.json`, `leaderboard.json`, `pathologies.json`, `claim_evidence_table.json`, `checkpoints.json`, and `benchmark_card.json`.")
@@ -697,7 +697,7 @@ with tab3:
                     for severity, count in severity_counts.items()
                 )
                 st.markdown(f"<div class='vb-pill-row'>{chips}</div>", unsafe_allow_html=True)
-                st.dataframe(pathology_df, use_container_width=True, height=320, hide_index=True)
+                st.dataframe(pathology_df, width="stretch", height=320, hide_index=True)
 
         c1, c2 = st.columns(2)
         with c1:
@@ -706,7 +706,7 @@ with tab3:
                 score_df.to_csv(index=False),
                 "vectorybenchmark_run_scores.csv",
                 "text/csv",
-                use_container_width=True,
+                width="stretch",
             )
         with c2:
             st.download_button(
@@ -714,7 +714,7 @@ with tab3:
                 leaderboard_df.to_csv(index=False),
                 "vectorybenchmark_leaderboard.csv",
                 "text/csv",
-                use_container_width=True,
+                width="stretch",
             )
 
 
@@ -769,7 +769,7 @@ The policy-proof sample demonstrates a proof-based validation path for policy-se
 That chain matters when a result includes partial validation. If a checker returns `NO_TRANSLATIONS`, Vectory keeps it visible as an unproved span instead of letting the agent silently count it as verified.
         """
     )
-    st.link_button("Contact Vectory", "https://vectoryai.com/#contact", use_container_width=False)
+    st.link_button("Contact Vectory", "https://vectoryai.com/#contact", width="content")
 
 
 with tab5:

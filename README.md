@@ -205,7 +205,7 @@ Choose your evaluation method:
 #### LLM-as-Judge (🤖)
 - Start with a critique-first binary Pass/Fail decision
 - Load a focused evaluator promoted from observed failure modes
-- Select OpenAI or Anthropic and run batch predictions
+- Select OpenAI, Anthropic, or Claude on Amazon Bedrock and run batch predictions
 - Validate predictions against held-out domain-expert labels before release gating
 
 #### Rule-Based Metrics (📏)
@@ -317,6 +317,20 @@ export ANTHROPIC_API_KEY="<anthropic-api-key>"
 #### Option 3: Manual Input
 
 Enter your API key directly in the UI (stored only in session).
+
+### Amazon Bedrock
+
+Claude models can also run through your AWS account, with no API key:
+
+```bash
+pip install 'vectoryai[bedrock]'
+aws sso login              # or any standard AWS credential source
+export AWS_REGION=us-east-1
+```
+
+Choose **Amazon Bedrock** as the provider and pick a US region (`us-east-1`, `us-east-2`, or `us-west-2`).
+Models use the `us.anthropic.*` cross-region inference profiles and Bedrock's regional prices.
+Exact token measurement is not available through Bedrock.
 
 ### Themes & Accessibility
 
