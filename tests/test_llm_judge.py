@@ -277,6 +277,21 @@ def test_identical_prompt_reuses_the_earlier_verdict_without_a_new_call():
     assert "reused" not in different
 
 
+def test_batch_only_waits_between_rows_that_called_the_provider(monkeypatch):
+    import components.evaluators.llm_judge as llm_judge
+
+    sleeps = []
+    monkeypatch.setattr(llm_judge.time, "sleep", sleeps.append)
+    evaluator = make_usage_evaluator('{"critique":"Fine.","result":"Pass"}')
+    evaluator.result_cache = {}
+    evaluator.rate_limit_delay = 0.5
+
+    evaluator.evaluate_batch(["a", "b"])
+    evaluator.evaluate_batch(["c", "a", "b"])
+
+    assert sleeps == [0.5, 0.5]
+
+
 def test_reuse_is_scoped_to_the_model_and_skips_failed_calls():
     cache = {}
     failing = make_usage_evaluator("not json")

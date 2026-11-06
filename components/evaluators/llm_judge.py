@@ -339,8 +339,8 @@ class LLMJudgeEvaluator(BaseEvaluator):
             if progress_callback:
                 progress_callback((i + 1) / total)
 
-            # Rate limiting
-            if self.rate_limit_delay > 0 and i < total - 1:
+            # Rate limiting; reused verdicts made no provider call.
+            if self.rate_limit_delay > 0 and i < total - 1 and not result.get("reused"):
                 time.sleep(self.rate_limit_delay)
 
         return pd.DataFrame(results)
