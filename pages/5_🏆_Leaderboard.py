@@ -61,7 +61,7 @@ st_components.html(
 
 refresh_col, status_col = st.columns([0.22, 0.78])
 with refresh_col:
-    force_refresh = st.button("Refresh now", use_container_width=True)
+    force_refresh = st.button("Refresh now", width="stretch")
 with status_col:
     st.caption("Leaderboard data refreshes in the background every 30 minutes. This page also reloads every 30 minutes while open.")
 
@@ -170,7 +170,7 @@ with tab1:
             "mean_score": "{:.3f}",
             **{c: "{:.3f}" for c in task_cols}
         }).background_gradient(subset=["mean_score"], cmap="RdYlGn"),
-        use_container_width=True,
+        width="stretch",
         height=400,
     )
 
@@ -185,7 +185,7 @@ with tab1:
             df.to_csv(index=False),
             "mteb_leaderboard.csv",
             "text/csv",
-            use_container_width=True,
+            width="stretch",
         )
     with c2:
         st.download_button(
@@ -193,7 +193,7 @@ with tab1:
             df.to_json(orient="records", indent=2),
             "mteb_leaderboard.json",
             "application/json",
-            use_container_width=True,
+            width="stretch",
         )
 
 # ==================== TAB 2: VISUALIZATIONS ====================
@@ -221,7 +221,7 @@ with tab2:
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # Radar chart
     if task_cols and len(df) >= 3:
@@ -248,7 +248,7 @@ with tab2:
             paper_bgcolor="rgba(0,0,0,0)",
             font=dict(family="Inter, sans-serif"),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     # Provider comparison
     if len(df["provider"].unique()) > 1:
@@ -259,7 +259,7 @@ with tab2:
 
         col1, col2 = st.columns([2, 1])
         with col1:
-            st.dataframe(provider_stats, use_container_width=True)
+            st.dataframe(provider_stats, width="stretch")
         with col2:
             for provider, row in provider_stats.iterrows():
                 score_bar(row["Mean Score"], label=provider[:15])

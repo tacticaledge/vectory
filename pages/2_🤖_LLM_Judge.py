@@ -11,21 +11,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-def get_api_key(provider: str) -> str:
-    """Get API key from session state or environment. Returns empty string if not found."""
-    # Map provider to session state key and env var name
-    key_map = {"openai": "openai_api_key", "anthropic": "anthropic_api_key"}
-
-    session_key = key_map.get(provider)
-    if not session_key:
-        return ""
-
-    # Check session state first (set via Settings page)
-    if session_key in st.session_state and st.session_state[session_key]:
-        return st.session_state[session_key]
-
-    return get_provider_api_key(provider)
-
 from components.models import init_session_state, ColumnMapping, DataSourceType
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_ids, get_model_label
 from components.evaluators.llm_judge import (
@@ -36,7 +21,7 @@ from components.evaluators.llm_judge import (
     summarize_usage,
 )
 from components.eval_workflow import validate_evaluator_definition
-from components.provider_config import get_provider_api_key
+from components.provider_ui import PROVIDERS, provider_credentials, provider_label
 from components.ui import (
     inject_custom_css,
     animated_metric,
@@ -59,7 +44,7 @@ st.markdown(f"""
     🤖 LLM-as-Judge Evaluation
 </h1>
 <p style="font-family: 'DM Sans', sans-serif; color: {theme.text_muted}; font-size: 1rem; margin-top: -10px;">
-    <span style="color: {theme.terminal};">$</span> use current OpenAI or Anthropic models to evaluate your outputs
+    <span style="color: {theme.terminal};">$</span> use current OpenAI, Anthropic, or Amazon Bedrock models to evaluate your outputs
 </p>
 """, unsafe_allow_html=True)
 
@@ -173,30 +158,17 @@ with col1:
 
     provider = st.selectbox(
         "Provider",
-        ["openai", "anthropic"],
+        PROVIDERS,
+        format_func=provider_label,
         help="Select the LLM provider"
     )
 
-    # Get API key from session state/env or allow manual input
-    default_key = get_api_key(provider)
-    if default_key:
-        st.success(f"✓ {provider.title()} API key loaded")
-        api_key = default_key
-    else:
-        api_key = st.text_input(
-            "API Key",
-            type="password",
-            placeholder=f"Enter your {provider.title()} API key",
-            help="Enter your API key here or configure it in the Settings page"
-        )
-        # Save to session state for persistence
-        if api_key:
-            session_key = f"{provider}_api_key"
-            st.session_state[session_key] = api_key
+    credentials = provider_credentials(st, provider, key_prefix="llm_judge")
+    api_key = credentials.api_key
 
     model_options = get_model_ids(provider)
     if not model_options:
-        st.warning(f"No public model catalog entries are configured for {provider.title()}.")
+        st.warning(f"No public model catalog entries are configured for {provider_label(provider)}.")
         st.stop()
 
     default_model = DEFAULT_MODEL_BY_PROVIDER.get(provider, model_options[0])
@@ -356,6 +328,15 @@ Reasoning: [Your explanation]"""
             help="Use {input}, {output}, and {reference} as placeholders"
         )
 
+    reuse_results = st.checkbox(
+        "Reuse earlier verdicts for identical prompts",
+        value=True,
+        help=(
+            "Rows whose prompt, model, and decision format exactly match an earlier successful judgment "
+            "in this session are not sent to the provider again. Turn off to re-sample the judge."
+        ),
+    )
+
     sample_subset = st.checkbox("Evaluate a subset of samples")
     if sample_subset:
         max_samples = st.number_input(
@@ -436,7 +417,7 @@ if (
 st.markdown("<br>", unsafe_allow_html=True)
 section_header("⚡ Run Evaluation", style="info")
 
-if not api_key:
+if not credentials.ready:
     st.markdown(f"""
     <div style="padding: 16px; background: {theme.bg_card}; border-radius: 12px; border-left: 4px solid {theme.error};">
         <p style="margin: 0; color: {theme.error};">
@@ -446,7 +427,7 @@ if not api_key:
     </div>
     """, unsafe_allow_html=True)
 else:
-    if st.button("🚀 Run LLM Evaluation", type="primary", use_container_width=True):
+    if st.button("🚀 Run LLM Evaluation", type="primary", width="stretch"):
         # Prepare data based on data source type
         eval_df = df.head(max_samples) if sample_subset else df
 
@@ -513,6 +494,10 @@ Note: This evaluation is based on image metadata. For full visual analysis, visi
                 include_reference=include_reference if data_source_type == DataSourceType.TABULAR else False,
                 rate_limit_delay=rate_limit,
                 decision_mode=decision_mode,
+                aws_region=credentials.aws_region,
+                result_cache=(
+                    st.session_state.setdefault("llm_judge_result_cache", {}) if reuse_results else None
+                ),
             )
         except Exception as e:
             st.error(f"Error initializing evaluator: {e}")
@@ -596,7 +581,7 @@ Note: This evaluation is based on image metadata. For full visual analysis, visi
                         plot_bgcolor="rgba(0,0,0,0)",
                         paper_bgcolor="rgba(0,0,0,0)",
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
             usage_summary = summarize_usage(results)
             if usage_summary:
@@ -621,9 +606,15 @@ Note: This evaluation is based on image metadata. For full visual analysis, visi
                     animated_metric("Output Tokens", f"{usage_summary['output_tokens']:,}", "📤", delay=3)
                 with usage_col4:
                     animated_metric("Cache Hit Rate", f"{usage_summary['cache_hit_rate'] * 100:.0f}%", "♻️", delay=4)
+                reused_note = (
+                    f"{usage_summary['reused_results']} rows reused earlier verdicts at no cost. "
+                    if usage_summary["reused_results"]
+                    else ""
+                )
                 st.caption(
                     f"List-price cost for {usage_summary['billed_calls']} billed calls. "
                     f"Output includes {usage_summary['reasoning_tokens']:,} reasoning tokens. "
+                    f"{reused_note}"
                     f"Estimate before the run was {cost_info.get('estimated_cost', 'Unknown')}."
                 )
 
@@ -644,6 +635,8 @@ Note: This evaluation is based on image metadata. For full visual analysis, visi
                 ).values
                 display_df["Tokens Out"] = results["output_tokens"].values
                 display_df["Cost (USD)"] = results["cost_usd"].values
+            if "reused" in results.columns:
+                display_df["Reused"] = results["reused"].fillna(False).astype(bool).values
 
             if "error" in results.columns:
                 errors = results["error"].dropna()
@@ -651,7 +644,7 @@ Note: This evaluation is based on image metadata. For full visual analysis, visi
                     st.warning(f"⚠️ {len(errors)} samples had errors during evaluation")
                     display_df["Error"] = results["error"].values
 
-            st.dataframe(display_df, use_container_width=True)
+            st.dataframe(display_df, width="stretch")
 
             # Export
             section_header("💾 Export Results", style="info")
@@ -663,7 +656,7 @@ Note: This evaluation is based on image metadata. For full visual analysis, visi
                     display_df.to_csv(index=False),
                     "llm_judge_results.csv",
                     "text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col2:
                 st.download_button(
@@ -671,7 +664,7 @@ Note: This evaluation is based on image metadata. For full visual analysis, visi
                     display_df.to_json(orient="records", indent=2),
                     "llm_judge_results.json",
                     "application/json",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         except Exception as e:

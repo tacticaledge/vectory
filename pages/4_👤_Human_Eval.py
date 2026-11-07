@@ -272,12 +272,12 @@ st.markdown("<br>", unsafe_allow_html=True)
 nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 1, 1, 1])
 
 with nav_col1:
-    if st.button("← Previous", use_container_width=True, disabled=(idx == 0)):
+    if st.button("← Previous", width="stretch", disabled=(idx == 0)):
         st.session_state.current_idx = max(0, idx - 1)
         st.rerun()
 
 with nav_col2:
-    if st.button("Skip / Next →", use_container_width=True, disabled=(idx >= total - 1)):
+    if st.button("Skip / Next →", width="stretch", disabled=(idx >= total - 1)):
         st.session_state.current_idx = min(total - 1, idx + 1)
         st.rerun()
 
@@ -285,7 +285,7 @@ with nav_col3:
     jump_to = st.number_input("Go to #", min_value=1, max_value=total, value=idx + 1, label_visibility="collapsed")
 
 with nav_col4:
-    if st.button("Go", use_container_width=True):
+    if st.button("Go", width="stretch"):
         st.session_state.current_idx = jump_to - 1
         st.rerun()
 
@@ -295,7 +295,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 c1, c2, _ = st.columns([1, 1, 2])
 
 with c1:
-    if st.button("💾 Save Annotation", type="primary", use_container_width=True):
+    if st.button("💾 Save Annotation", type="primary", width="stretch"):
         if not feedback.strip():
             st.error("Add a detailed critique before saving the verdict.")
         else:
@@ -321,7 +321,7 @@ with c1:
                 st.rerun()
 
 with c2:
-    if idx in annotations and st.button("🗑️ Clear", use_container_width=True):
+    if idx in annotations and st.button("🗑️ Clear", width="stretch"):
         del annotations[idx]
         st.session_state.human_annotations = annotations
         st.rerun()
@@ -365,14 +365,14 @@ if annotations:
             "📄 Download CSV",
             pd.DataFrame(export_data).to_csv(index=False),
             "annotations.csv",
-            use_container_width=True,
+            width="stretch",
         )
     with c2:
         st.download_button(
             "📋 Download JSON",
             json.dumps(export_data, indent=2, default=str),
             "annotations.json",
-            use_container_width=True,
+            width="stretch",
         )
 
 # Clear all in sidebar

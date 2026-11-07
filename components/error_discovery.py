@@ -126,11 +126,12 @@ def generate_taxonomy_suggestions(
     provider: str,
     api_key: str,
     model: str,
+    aws_region: str | None = None,
 ) -> list[dict[str, Any]]:
     """Call an LLM provider and return normalized taxonomy suggestions."""
     prompt = build_taxonomy_prompt(open_codes, existing_failure_modes)
 
-    bot = Bot(provider=provider, api_key=api_key, model=model)
+    bot = Bot(provider=provider, api_key=api_key, model=model, aws_region=aws_region)
     response_text = bot.complete(
         [
             {"role": "system", "content": TAXONOMY_SYSTEM_PROMPT},

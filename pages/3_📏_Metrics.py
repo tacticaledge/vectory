@@ -165,7 +165,7 @@ with col3:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-if st.button("🚀 Run Selected Metrics", type="primary", use_container_width=True):
+if st.button("🚀 Run Selected Metrics", type="primary", width="stretch"):
     outputs = df[mapping_dict["output"]].astype(str).tolist()
     references = df[mapping_dict["expected"]].astype(str).tolist() if has_reference else None
     inputs = df[mapping_dict["input"]].astype(str).tolist() if mapping_dict.get("input") else None
@@ -282,7 +282,7 @@ if st.button("🚀 Run Selected Metrics", type="primary", use_container_width=Tr
         st.markdown("<br>", unsafe_allow_html=True)
 
         summary = combined[numeric_cols].describe()
-        st.dataframe(summary, use_container_width=True)
+        st.dataframe(summary, width="stretch")
 
         # Visualizations
         section_header("📈 Score Distributions", style="warning")
@@ -304,7 +304,7 @@ if st.button("🚀 Run Selected Metrics", type="primary", use_container_width=Tr
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         # Per-sample results
         section_header("📋 Per-Sample Results", style="success")
@@ -320,7 +320,7 @@ if st.button("🚀 Run Selected Metrics", type="primary", use_container_width=Tr
                 results_df = results_df.rename(columns={col: f"{col}_result"})
 
         display_df = pd.concat([display_df, results_df], axis=1)
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, width="stretch")
 
         # Export
         section_header("💾 Export Results", style="info")
@@ -332,7 +332,7 @@ if st.button("🚀 Run Selected Metrics", type="primary", use_container_width=Tr
                 display_df.to_csv(index=False),
                 "evaluation_results.csv",
                 "text/csv",
-                use_container_width=True,
+                width="stretch",
             )
         with col2:
             st.download_button(
@@ -340,7 +340,7 @@ if st.button("🚀 Run Selected Metrics", type="primary", use_container_width=Tr
                 display_df.to_json(orient="records", indent=2),
                 "evaluation_results.json",
                 "application/json",
-                use_container_width=True,
+                width="stretch",
             )
 
 # Show previous results if available
@@ -363,4 +363,4 @@ elif "metrics" in st.session_state.get("evaluation_results", {}):
 
     numeric_cols = results.select_dtypes(include=["float64", "int64"]).columns
     summary = results[numeric_cols].describe()
-    st.dataframe(summary, use_container_width=True)
+    st.dataframe(summary, width="stretch")

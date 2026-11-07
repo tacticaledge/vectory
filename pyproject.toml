@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: Software Development :: Testing",
 ]
 dependencies = [
-    "streamlit>=1.28.0",
+    "streamlit>=1.51.0",
     "pandas>=2.0.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
@@ -51,6 +51,9 @@ embedding = [
     "torch>=2.1.0",
     "mteb>=1.0.0",
     "sentence-transformers>=2.2.0",
+]
+bedrock = [
+    "anthropic[bedrock]>=0.77.0",
 ]
 formal = [
     "z3-solver>=4.13.0",

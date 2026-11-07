@@ -1,3 +1,5 @@
+import hashlib
+import json
 import re
 import time
 from typing import Literal
@@ -5,6 +7,12 @@ from typing import Literal
 from components.agentic import BilledCompletionError, Bot, Completion
 from components.model_catalog import DEFAULT_MODEL_BY_PROVIDER, get_model_pricing
 from components.usage import TokenUsage, usage_cost
+
+# Providers served through Anthropic's Messages API (directly or via Amazon Bedrock).
+MESSAGES_API_PROVIDERS = {"anthropic", "bedrock"}
+
+# Bound on reusable verdicts kept per caller-owned cache; the oldest are dropped first.
+MAX_REUSED_RESULTS = 5000
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .base import BaseEvaluator
@@ -100,9 +108,14 @@ class LLMJudgeEvaluator(BaseEvaluator):
         include_reference: bool = True,
         rate_limit_delay: float = 0.5,
         decision_mode: str = "binary",
+        aws_region: str = None,
+        result_cache: dict = None,
     ):
         self.provider = provider
         self.api_key = api_key
+        self.aws_region = aws_region
+        # Caller-owned (for example, one Streamlit session's state), so verdicts never cross users.
+        self.result_cache = result_cache
         self.model = model or self._default_model()
         self.criteria = CRITERIA_TEMPLATES.get(criteria, criteria)
         if criteria == "custom" and custom_criteria:
@@ -123,6 +136,7 @@ class LLMJudgeEvaluator(BaseEvaluator):
             provider=self.provider,
             api_key=self.api_key,
             model=self.model,
+            aws_region=self.aws_region,
         )
 
     def _build_prompt(self, output: str, reference: str = None, input_text: str = None) -> str:
@@ -158,7 +172,7 @@ class LLMJudgeEvaluator(BaseEvaluator):
 
     def _cache_prefix(self) -> str | None:
         """Return the prompt text shared by every row, which Anthropic can serve from cache."""
-        if self.provider != "anthropic" or not self.custom_prompt:
+        if self.provider not in MESSAGES_API_PROVIDERS or not self.custom_prompt:
             return None
         positions = [
             self.custom_prompt.find(placeholder)
@@ -232,13 +246,28 @@ class LLMJudgeEvaluator(BaseEvaluator):
             cache_prefix=self._cache_prefix(),
         )
 
+    def _result_key(self, prompt: str) -> str:
+        identity = [self.provider, self.model, self.decision_mode, prompt]
+        return hashlib.sha256(json.dumps(identity).encode("utf-8")).hexdigest()
+
+    def _remember(self, key: str, result: dict) -> None:
+        cache = self.result_cache
+        cache.pop(key, None)
+        cache[key] = result
+        while len(cache) > MAX_REUSED_RESULTS:
+            cache.pop(next(iter(cache)))
+
     def evaluate_single(self, output: str, reference: str = None, input_text: str = None) -> dict:
         prompt = self._build_prompt(output, reference, input_text)
+        result_key = self._result_key(prompt) if self.result_cache is not None else None
+        if result_key is not None and result_key in self.result_cache:
+            # An identical prompt was already judged by the same model: reuse it at no cost.
+            return {**self.result_cache[result_key], "reused": True}
 
         try:
             if self.provider == "openai":
                 completion = self._call_openai(prompt)
-            elif self.provider == "anthropic":
+            elif self.provider in MESSAGES_API_PROVIDERS:
                 completion = self._call_anthropic(prompt)
             else:
                 return {"score": None, "error": f"Unsupported provider: {self.provider}"}
@@ -258,6 +287,9 @@ class LLMJudgeEvaluator(BaseEvaluator):
             result = self._parse_response(completion.text)
         except Exception as e:
             return {"score": None, "reasoning": None, "error": str(e), **usage_fields}
+        # Only verdicts with a score are reused; a 1-5 reply without one is retried next run.
+        if result_key is not None and result.get("score") is not None:
+            self._remember(result_key, result)
         return {**result, **usage_fields}
 
     def measure_input_tokens(
@@ -308,8 +340,8 @@ class LLMJudgeEvaluator(BaseEvaluator):
             if progress_callback:
                 progress_callback((i + 1) / total)
 
-            # Rate limiting
-            if self.rate_limit_delay > 0 and i < total - 1:
+            # Rate limiting; reused verdicts made no provider call.
+            if self.rate_limit_delay > 0 and i < total - 1 and not result.get("reused"):
                 time.sleep(self.rate_limit_delay)
 
         return pd.DataFrame(results)
@@ -339,18 +371,20 @@ def usage_columns(provider: str, model: str, usage: TokenUsage | None) -> dict:
 
 
 def summarize_usage(results) -> dict | None:
-    """Total the billed usage recorded in a judge results frame, or None if none was recorded."""
-    if "input_tokens" not in results.columns:
+    """Total the billed usage recorded in a judge results frame, or None if none was recorded.
+
+    A run where every row reused an earlier verdict still has a summary: zero calls, $0.
+    """
+    if "input_tokens" not in results.columns and "reused" not in results.columns:
         return None
-    totals = {name: int(results[name].fillna(0).sum()) for name in USAGE_COLUMNS}
-    reported_rows = int(results["input_tokens"].notna().sum())
-    missing_rows = (
-        int(results["usage_missing"].fillna(False).astype(bool).sum())
-        if "usage_missing" in results.columns
-        else 0
-    )
-    costs = results["cost_usd"]
+    totals = {
+        name: int(get_result_column(results, name).fillna(0).sum()) for name in USAGE_COLUMNS
+    }
+    reported_rows = int(get_result_column(results, "input_tokens").notna().sum())
+    missing_rows = int(get_result_column(results, "usage_missing").fillna(False).astype(bool).sum())
+    costs = get_result_column(results, "cost_usd")
     totals["billed_calls"] = reported_rows + missing_rows
+    totals["reused_results"] = int(get_result_column(results, "reused").fillna(False).astype(bool).sum())
     totals["cost_usd"] = (
         float(costs.fillna(0).sum())
         if missing_rows == 0 and costs.notna().sum() == reported_rows
