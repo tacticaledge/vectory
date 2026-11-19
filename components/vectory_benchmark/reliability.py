@@ -49,22 +49,26 @@ def _task_trials(scores: list[RunScore]) -> dict[tuple[str, str, str], list[RunS
     return grouped
 
 
+def submission_reliability_k(scores: list[RunScore]) -> int | None:
+    """Shared k for a submission: the largest k every repeated-run task supports.
+
+    One k is used for every agent, model, and task so that per-task rows,
+    leaderboard entries, and aggregate summaries stay comparable.
+    """
+
+    return reliability_k(len(task_scores) for task_scores in _task_trials(scores).values())
+
+
 def task_reliability_rows(scores: list[RunScore], *, k: int | None = None) -> list[dict[str, Any]]:
     """Build per-task pass@k and pass^k rows, one row per agent/model/task."""
 
     grouped = _task_trials(scores)
-    chosen_by_group: dict[tuple[str, str], int | None] = {}
-    if k is None:
-        trials_by_group: dict[tuple[str, str], list[int]] = defaultdict(list)
-        for (agent, model, _task_id), task_scores in grouped.items():
-            trials_by_group[(agent, model)].append(len(task_scores))
-        chosen_by_group = {group: reliability_k(counts) for group, counts in trials_by_group.items()}
+    chosen = k if k is not None else submission_reliability_k(scores)
 
     rows: list[dict[str, Any]] = []
     for (agent, model, task_id), task_scores in grouped.items():
         trials = len(task_scores)
         successes = sum(1 for score in task_scores if score.passed)
-        chosen = k if k is not None else chosen_by_group[(agent, model)]
         usable = chosen is not None and chosen <= trials
         rows.append(
             {
@@ -90,7 +94,7 @@ def reliability_summary(scores: list[RunScore], *, k: int | None = None) -> dict
         (len(task_scores), sum(1 for score in task_scores if score.passed))
         for task_scores in _task_trials(scores).values()
     ]
-    chosen = k if k is not None else reliability_k(trials for trials, _successes in counts)
+    chosen = k if k is not None else submission_reliability_k(scores)
     eligible = (
         [(trials, successes) for trials, successes in counts if trials >= chosen]
         if chosen is not None

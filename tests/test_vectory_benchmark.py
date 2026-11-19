@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from statistics import mean
 
+import pandas as pd
 import pytest
 
 from components.vectory_benchmark.leaderboard import build_leaderboard
@@ -187,7 +188,11 @@ def _repeat_task(task_id: str = "coding.repeat") -> BenchmarkTask:
     )
 
 
-def _repeated_scores(pass_flags: list[bool], task_id: str = "coding.repeat"):
+def _repeated_scores(
+    pass_flags: list[bool],
+    task_id: str = "coding.repeat",
+    agent: str = "RepeatAgent",
+):
     """Score one run per flag so the task has repeated trials with known outcomes."""
 
     task = _repeat_task(task_id)
@@ -195,10 +200,10 @@ def _repeated_scores(pass_flags: list[bool], task_id: str = "coding.repeat"):
     for index, should_pass in enumerate(pass_flags):
         if should_pass:
             run = {
-                "agent": "RepeatAgent",
+                "agent": agent,
                 "model": "local",
                 "task_id": task_id,
-                "run_id": f"{task_id}.run_{index}",
+                "run_id": f"{agent}.{task_id}.run_{index}",
                 "status": "completed",
                 "final_answer": "Applied the fix and verified the test.",
                 "declared_success": True,
@@ -211,10 +216,10 @@ def _repeated_scores(pass_flags: list[bool], task_id: str = "coding.repeat"):
             }
         else:
             run = {
-                "agent": "RepeatAgent",
+                "agent": agent,
                 "model": "local",
                 "task_id": task_id,
-                "run_id": f"{task_id}.run_{index}",
+                "run_id": f"{agent}.{task_id}.run_{index}",
                 "status": "failed",
                 "final_answer": "",
                 "events": [{"type": "error", "content": "crashed"}],
@@ -294,6 +299,36 @@ def test_reliability_summary_uses_k_supported_by_every_repeated_task():
     assert rows["coding.repeat_single"]["k"] is None
     assert rows["coding.repeat_single"]["pass_at_k"] is None
     assert reliability_summary(scores, k=3)["reliability_tasks"] == 1
+
+
+def test_mixed_agent_reliability_uses_one_shared_k():
+    scores = _repeated_scores([True, True, False, True], agent="DeepAgent")
+    scores += _repeated_scores([True, False], agent="FastAgent")
+    scores += _repeated_scores([True], agent="SingleRunAgent")
+
+    summary = reliability_summary(scores)
+    rows = {row["agent"]: row for row in task_reliability_rows(scores)}
+    leaderboard = build_leaderboard(scores)
+    entries = {entry["agent"]: entry for entry in leaderboard.to_dict(orient="records")}
+
+    # The smallest repeated trial count in the submission is 2, so every task row,
+    # every leaderboard entry, and the overall summary must report k=2.
+    assert summary["reliability_k"] == 2
+    assert {row["k"] for row in rows.values()} == {2, None}
+    assert rows["DeepAgent"]["k"] == 2
+    assert rows["FastAgent"]["k"] == 2
+    assert rows["SingleRunAgent"]["k"] is None
+    assert entries["DeepAgent"]["reliability_k"] == 2
+    assert entries["FastAgent"]["reliability_k"] == 2
+    assert pd.isna(entries["SingleRunAgent"]["reliability_k"])
+    # pass^2 is C(3,2)/C(4,2) for the 3-of-4 agent and C(1,2)/C(2,2) for the 1-of-2 agent.
+    assert rows["DeepAgent"]["pass_hat_k"] == pytest.approx(0.5)
+    assert rows["FastAgent"]["pass_hat_k"] == pytest.approx(0.0)
+    assert entries["DeepAgent"]["pass_hat_k"] == pytest.approx(0.5)
+    assert entries["FastAgent"]["pass_hat_k"] == pytest.approx(0.0)
+    assert pd.isna(entries["SingleRunAgent"]["pass_hat_k"])
+    assert summary["reliability_tasks"] == 2
+    assert summary["pass_hat_k"] == pytest.approx(mean([0.5, 0.0]), abs=1e-4)
 
 
 def test_leaderboard_keeps_robust_pass_at_5_without_repeated_runs():
