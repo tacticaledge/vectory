@@ -295,6 +295,7 @@ def test_leakage_check_passes_when_examples_come_from_train_only():
     assert report["matches"] == []
     assert report["checked_splits"] == {"dev": 2, "test": 2}
     assert report["records_with_field"] == {"input": 4, "output": 4}
+    assert report["compared_texts"] == {"input": 4, "output": 4}
 
 
 def test_leakage_check_matches_multiline_record_text():
@@ -329,12 +330,31 @@ def test_leakage_check_skips_incidental_short_texts():
 
     report = detect_evaluator_leakage(
         train_seeded_evaluator(records),
-        {"test": [{"input": "Pass", "output": "Fail"}]},
+        {"test": [{"input": records[10]["input"], "output": "Fail"}]},
         minimum_characters=8,
     )
 
     assert report["clean"] is True
-    assert report["skipped_short_texts"] == 2
+    assert report["skipped_short_texts"] == 1
+    assert report["compared_texts"] == {"input": 1, "output": 0}
+
+
+def test_leakage_check_is_not_clean_when_every_text_is_too_short():
+    records = labeled_split_records()
+
+    report = detect_evaluator_leakage(
+        train_seeded_evaluator(records),
+        {"test": [{"input": "Pass", "output": "Fail"}, {"input": None, "output": ""}]},
+        minimum_characters=8,
+    )
+
+    assert report["records_with_field"] == {"input": 2, "output": 2}
+    assert report["compared_texts"] == {"input": 0, "output": 0}
+    assert report["fields_without_records"] == []
+    assert report["matches"] == []
+    assert report["clean"] is False
+    assert "compared no held-out text for input, output" in describe_leakage(report)
+    assert "shorter than 8 characters" in describe_leakage(report)
 
 
 def test_rule_promotion_requires_a_pattern():

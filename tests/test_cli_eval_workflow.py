@@ -291,17 +291,61 @@ def test_check_leakage_reports_held_out_records_in_an_evaluator(tmp_path, capsys
     assert payload["matches"][0]["location"] == "expert_examples[1].input"
     assert "Leak: test[0] field input" in capsys.readouterr().out
 
-    with pytest.raises(SystemExit):
-        main(
-            [
-                "check-leakage",
-                str(evaluator_path),
-                "--split-manifest",
-                str(split_dir / "split_manifest.json"),
-                "--splits",
-                "holdout",
-            ]
-        )
+    for split_name in ("holdout", "train"):
+        with pytest.raises(SystemExit):
+            main(
+                [
+                    "check-leakage",
+                    str(evaluator_path),
+                    "--split-manifest",
+                    str(split_dir / "split_manifest.json"),
+                    "--splits",
+                    split_name,
+                ]
+            )
+
+
+def test_check_leakage_fails_when_every_compared_text_is_too_short(tmp_path, capsys):
+    split_dir, _, workspace = _text_split_fixture(tmp_path)
+    assert main(
+        [
+            "promote",
+            str(workspace),
+            "Unsupported claim",
+            "--errors-reviewed",
+            "--train-split",
+            str(split_dir / "train.jsonl"),
+            "--input-fields",
+            "input",
+            "output",
+        ]
+    ) == 0
+    evaluator_path = workspace / "evaluators" / "failure-unsupported-claim.json"
+    report = tmp_path / "leakage.json"
+
+    assert main(
+        [
+            "check-leakage",
+            str(evaluator_path),
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
+            "--text-fields",
+            "human_label",
+            "--out",
+            str(report),
+        ]
+    ) == 1
+
+    output = capsys.readouterr().out
+    assert "Fields absent from every record" not in output
+    assert "Leakage: UNCHECKED" in output
+    assert "compared no held-out text for human_label" in output
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["clean"] is False
+    assert payload["matches"] == []
+    assert payload["fields_without_records"] == []
+    assert payload["compared_texts"] == {"human_label": 0}
+    assert payload["skipped_short_texts"] == payload["records_with_field"]["human_label"]
 
 
 def test_check_leakage_fails_when_no_compared_field_exists(tmp_path, capsys):

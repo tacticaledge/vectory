@@ -373,6 +373,11 @@ def _held_out_split_records(manifest_path: Path, names: list[str]) -> dict[str, 
     artifacts = manifest.get("artifacts") or {}
     splits = {}
     for name in names:
+        if name not in HELD_OUT_SPLITS:
+            raise ValueError(
+                f"Leakage checks only read held-out splits, not {name!r}. "
+                f"Available splits: {', '.join(HELD_OUT_SPLITS)}"
+            )
         artifact = artifacts.get(name)
         if not isinstance(artifact, dict) or not artifact.get("path"):
             raise ValueError(f"Split manifest does not describe a {name} artifact")
@@ -869,8 +874,12 @@ def build_parser() -> argparse.ArgumentParser:
     leakage_parser.add_argument(
         "--splits",
         nargs="+",
+        choices=list(HELD_OUT_SPLITS),
         default=list(HELD_OUT_SPLITS),
-        help="Split names to check. Default: dev test.",
+        help=(
+            "Held-out split names to check. Train examples belong in the definition, "
+            f"so only {' and '.join(HELD_OUT_SPLITS)} can be checked. Default: dev test."
+        ),
     )
     leakage_parser.add_argument(
         "--text-fields",
