@@ -462,6 +462,7 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         "evaluator_label_column": args.judge_column,
         "metrics": metrics,
         "confidence_intervals_95": intervals,
+        "labels_sha256": _records_sha256(records, [args.human_column, args.judge_column]),
         "thresholds": {
             "minimum_tpr": effective_min_tpr,
             "minimum_tnr": effective_min_tnr,
@@ -561,8 +562,10 @@ def run_estimate(args: argparse.Namespace) -> int:
             blockers.append(f"evaluator status is {evaluator.status}, not validated")
         elif last_report is None or not last_report.gate_passed:
             blockers.append("evaluator has no passing validation report")
-        elif last_report.metrics.confusion_matrix.model_dump() != (
-            validate_evaluator_labels(human_labels, test_judge_labels)["confusion_matrix"]
+        elif last_report.labels_sha256 is None:
+            blockers.append("evaluator validation predates label fingerprints; re-run validate-judge")
+        elif last_report.labels_sha256 != _records_sha256(
+            test_records, [args.human_column, test_judge_column]
         ):
             blockers.append("test set labels do not match the evaluator's validation report")
     interval = estimate["confidence_interval_95"]

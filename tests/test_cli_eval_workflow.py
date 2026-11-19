@@ -197,7 +197,7 @@ def _validated_judge_fixture(tmp_path):
     production = tmp_path / "production.jsonl"
     write_jsonl(
         production,
-        [{"id": index, "verdict": "Pass" if index < 9 else "Fail"} for index in range(10)],
+        [{"id": index, "verdict": "Pass" if index < 180 else "Fail"} for index in range(200)],
     )
     arguments = [
         "estimate",
@@ -238,7 +238,7 @@ def test_estimate_gates_on_interval_lower_bound(tmp_path, capsys):
     out = tmp_path / "estimate.json"
 
     assert main(
-        [*arguments, "--evaluator", str(evaluator_path), "--min-pass-rate", "0.85", "--out", str(out)]
+        [*arguments, "--evaluator", str(evaluator_path), "--min-pass-rate", "0.8", "--out", str(out)]
     ) == 0
     report = json.loads(out.read_text(encoding="utf-8"))
     assert report["estimate"]["observed_pass_rate"] == 0.9
@@ -272,6 +272,27 @@ def test_estimate_gate_rejects_labels_that_differ_from_validation(tmp_path):
     test_records = [json.loads(line) for line in test_path.read_text().splitlines()]
     first_fail = next(record for record in test_records if record["human_label"] == "Fail")
     first_fail["judge_label"] = "Pass"
+    write_jsonl(test_path, test_records)
+    out = tmp_path / "estimate.json"
+
+    assert main(
+        [*arguments, "--evaluator", str(evaluator_path), "--min-pass-rate", "0.5", "--out", str(out)]
+    ) == 1
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["gate_blockers"] == [
+        "test set labels do not match the evaluator's validation report"
+    ]
+
+
+def test_estimate_gate_rejects_reordered_predictions_with_same_totals(tmp_path):
+    arguments, validate_arguments, evaluator_path, test_path = _validated_judge_fixture(tmp_path)
+    test_records = [json.loads(line) for line in test_path.read_text().splitlines()]
+    first, second = [record for record in test_records if record["human_label"] == "Pass"][:2]
+    first["judge_label"] = "Fail"
+    write_jsonl(test_path, test_records)
+    assert main(validate_arguments) == 0
+    first["judge_label"] = "Pass"
+    second["judge_label"] = "Fail"
     write_jsonl(test_path, test_records)
     out = tmp_path / "estimate.json"
 

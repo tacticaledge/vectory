@@ -151,6 +151,7 @@ class JudgeValidationReport(StrictModel):
     gate_passed: bool
     groups: list[GroupValidationReport] = Field(default_factory=list)
     gate_blockers: list[str] = Field(default_factory=list)
+    labels_sha256: str | None = None
 
 
 class SuccessRateEstimate(StrictModel):

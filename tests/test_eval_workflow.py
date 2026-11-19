@@ -222,6 +222,8 @@ def test_corrected_success_rate_matches_rogan_gladen():
     assert corrected_success_rate(0.05, 0.9, 0.85) == 0.0
     with pytest.raises(ValueError, match="no better than chance"):
         corrected_success_rate(0.5, 0.5, 0.5)
+    with pytest.raises(ValueError, match="TPR must be between 0 and 1"):
+        corrected_success_rate(0.5, 1.2, 0.9)
 
 
 def test_estimate_success_rate_reports_raw_corrected_and_interval():

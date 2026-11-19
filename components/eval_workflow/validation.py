@@ -123,8 +123,9 @@ def bootstrap_metric_intervals(
 
 def corrected_success_rate(observed_pass_rate: float, tpr: float, tnr: float) -> float:
     """Correct an observed judge pass rate for judge error (Rogan-Gladen estimator)."""
-    if not 0 <= observed_pass_rate <= 1:
-        raise ValueError("Observed pass rate must be between 0 and 1")
+    for name, value in (("Observed pass rate", observed_pass_rate), ("TPR", tpr), ("TNR", tnr)):
+        if not 0 <= value <= 1:
+            raise ValueError(f"{name} must be between 0 and 1")
     denominator = tpr + tnr - 1
     if denominator <= 0:
         raise ValueError(
@@ -145,8 +146,9 @@ def estimate_success_rate(
 
     ``judge_labels`` are the evaluator's verdicts on the unlabeled population.
     ``human_labels`` and ``evaluator_labels`` are the held-out test pairs used to
-    measure judge accuracy. The 95% interval bootstraps the test pairs and holds
-    the observed pass rate fixed, so it reflects uncertainty in TPR and TNR.
+    measure judge accuracy. The 95% interval bootstraps the test pairs and the
+    judged population together, so it reflects uncertainty in TPR, TNR, and the
+    observed pass rate.
     Resamples that lack a class or leave the judge at or below chance cannot be
     corrected; they count as 0 for the lower bound and 1 for the upper bound, so
     they widen the interval instead of being dropped.
@@ -171,6 +173,7 @@ def estimate_success_rate(
     chunk_size = max(1, _BOOTSTRAP_CELLS_PER_CHUNK // len(human_pass))
     for start in range(0, iterations, chunk_size):
         stop = min(start + chunk_size, iterations)
+        sampled_rate = rng.binomial(len(observed), observed_pass_rate, size=stop - start) / len(observed)
         indices = rng.integers(0, len(human_pass), size=(stop - start, len(human_pass)))
         sampled_human = human_pass[indices]
         sampled_judge = judge_pass[indices]
@@ -181,7 +184,7 @@ def estimate_success_rate(
             tnr = (~sampled_human & ~sampled_judge).sum(axis=1) / fail_counts
             denominator = tpr + tnr - 1
             usable[start:stop] = (pass_counts > 0) & (fail_counts > 0) & (denominator > 0)
-            estimates[start:stop] = np.clip((observed_pass_rate + tnr - 1) / denominator, 0.0, 1.0)
+            estimates[start:stop] = np.clip((sampled_rate + tnr - 1) / denominator, 0.0, 1.0)
     lower = float(np.percentile(np.where(usable, estimates, 0.0), 2.5))
     upper = float(np.percentile(np.where(usable, estimates, 1.0), 97.5))
 
