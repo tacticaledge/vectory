@@ -151,6 +151,67 @@ def test_split_and_validate_judge_gate(tmp_path):
     assert "judge_label" not in report_payload["provenance"]["verified_fields"]
 
 
+def test_estimate_gates_on_interval_lower_bound(tmp_path, capsys):
+    labels = tmp_path / "labels.jsonl"
+    write_jsonl(
+        labels,
+        [
+            {"id": index, "human_label": "Pass" if index % 2 == 0 else "Fail", "judge_label": ""}
+            for index in range(80)
+        ],
+    )
+    split_dir = tmp_path / "splits"
+    assert main(
+        [
+            "split-labels",
+            str(labels),
+            "--label-column",
+            "human_label",
+            "--judge-column",
+            "judge_label",
+            "--out",
+            str(split_dir),
+        ]
+    ) == 0
+    test_path = split_dir / "test.jsonl"
+    test_records = [json.loads(line) for line in test_path.read_text().splitlines()]
+    for record in test_records:
+        record["judge_label"] = record["human_label"]
+    write_jsonl(test_path, test_records)
+    production = tmp_path / "production.jsonl"
+    write_jsonl(
+        production,
+        [{"id": index, "verdict": "Pass" if index < 9 else "Fail"} for index in range(10)],
+    )
+    arguments = [
+        "estimate",
+        str(production),
+        "--judge-column",
+        "verdict",
+        "--test-set",
+        str(test_path),
+        "--test-judge-column",
+        "judge_label",
+        "--human-column",
+        "human_label",
+        "--split-manifest",
+        str(split_dir / "split_manifest.json"),
+        "--bootstrap-iterations",
+        "200",
+    ]
+    out = tmp_path / "estimate.json"
+
+    assert main([*arguments, "--min-pass-rate", "0.85", "--out", str(out)]) == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["estimate"]["observed_pass_rate"] == 0.9
+    assert report["estimate"]["corrected_pass_rate"] == pytest.approx(0.9)
+    assert report["gate_passed"] is True
+    assert report["provenance"]["verified"] is True
+    assert "corrected=0.900" in capsys.readouterr().out
+
+    assert main([*arguments, "--min-pass-rate", "0.95"]) == 1
+
+
 def test_validate_judge_fails_ci_when_one_class_is_missed(tmp_path):
     labels = tmp_path / "labels.jsonl"
     write_jsonl(

@@ -20,6 +20,7 @@ from components.eval_workflow import (
     build_evaluator_definition,
     dataframe_to_records,
     dump_evaluator_definition,
+    estimate_success_rate,
     initialize_review_workspace,
     load_review_workspace,
     parse_evaluator_definition,
@@ -511,6 +512,70 @@ def run_validate_judge(args: argparse.Namespace) -> int:
     return 0 if gate_passed else 1
 
 
+def run_estimate(args: argparse.Namespace) -> int:
+    if args.min_pass_rate is not None and not 0 <= args.min_pass_rate <= 1:
+        raise ValueError("Minimum pass rate must be between 0 and 1")
+    test_judge_column = args.test_judge_column or args.judge_column
+    if args.human_column == test_judge_column:
+        raise ValueError("Human and judge label columns must be different")
+    records = _load_records(args.dataset)
+    if any(args.judge_column not in record for record in records):
+        raise ValueError(f"Missing judge label column in dataset: {args.judge_column}")
+    test_records = _load_records(args.test_set)
+    provenance = _verify_test_split_provenance(
+        args.test_set,
+        test_records,
+        args.split_manifest,
+        args.human_column,
+        test_judge_column,
+    )
+    missing = [
+        column
+        for column in (args.human_column, test_judge_column)
+        if any(column not in record for record in test_records)
+    ]
+    if missing:
+        raise ValueError(f"Missing required test label columns: {', '.join(missing)}")
+    estimate = estimate_success_rate(
+        [record[args.judge_column] for record in records],
+        [record[args.human_column] for record in test_records],
+        [record[test_judge_column] for record in test_records],
+        iterations=args.bootstrap_iterations,
+        seed=args.seed,
+    )
+    interval = estimate["confidence_interval_95"]
+    gate_passed = None
+    if args.min_pass_rate is not None:
+        gate_passed = interval is not None and interval[0] >= args.min_pass_rate
+    report = {
+        "schema_version": "1.0",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "dataset": str(args.dataset),
+        "test_set": str(args.test_set),
+        "provenance": provenance,
+        "judge_label_column": args.judge_column,
+        "estimate": estimate,
+        "minimum_pass_rate": args.min_pass_rate,
+        "gate_passed": gate_passed,
+    }
+    if args.out:
+        _write_json(args.out, report)
+        print(f"Wrote success-rate estimate: {args.out}")
+    interval_text = (
+        f"[{interval[0]:.3f}, {interval[1]:.3f}]" if interval is not None else "n/a"
+    )
+    print(
+        "Success rate: "
+        f"observed={estimate['observed_pass_rate']:.3f}, "
+        f"corrected={estimate['corrected_pass_rate']:.3f}, "
+        f"95% CI={interval_text}"
+    )
+    if gate_passed is None:
+        return 0
+    print("Gate: PASS" if gate_passed else "Gate: FAIL")
+    return 0 if gate_passed else 1
+
+
 def _available(module: str) -> bool:
     return importlib.util.find_spec(module) is not None
 
@@ -688,6 +753,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report metrics by dimensions such as feature, scenario, or persona.",
     )
     validate_parser.set_defaults(func=run_validate_judge)
+
+    estimate_parser = subparsers.add_parser(
+        "estimate",
+        help="Estimate the true pass rate of judged outputs, corrected for judge error.",
+    )
+    estimate_parser.add_argument("dataset", type=Path, help="JSON, JSONL, or CSV of outputs labeled by the judge.")
+    estimate_parser.add_argument("--judge-column", required=True, help="Evaluator Pass/Fail label column.")
+    estimate_parser.add_argument("--test-set", type=Path, required=True, help="Held-out human-labeled test set with judge labels.")
+    estimate_parser.add_argument("--human-column", required=True, help="Trusted human Pass/Fail label column in the test set.")
+    estimate_parser.add_argument(
+        "--test-judge-column",
+        help="Evaluator label column in the test set. Default: the --judge-column name.",
+    )
+    estimate_parser.add_argument(
+        "--split-manifest",
+        type=Path,
+        required=True,
+        help="Manifest used to verify that the test set is the untouched held-out partition.",
+    )
+    estimate_parser.add_argument(
+        "--min-pass-rate",
+        type=float,
+        help="Fail unless the lower bound of the 95%% interval reaches this rate.",
+    )
+    estimate_parser.add_argument("--bootstrap-iterations", type=int, default=20000)
+    estimate_parser.add_argument("--seed", type=int, default=42)
+    estimate_parser.add_argument("--out", type=Path, help="Optional JSON estimate report path.")
+    estimate_parser.set_defaults(func=run_estimate)
 
     doctor_parser = subparsers.add_parser("doctor", help="Check local Vectory installation health.")
     doctor_parser.set_defaults(func=doctor)

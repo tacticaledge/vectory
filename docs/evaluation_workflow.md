@@ -117,6 +117,24 @@ The split manifest fingerprints every original test field independently and desi
 
 Raw agreement alone can be misleading on imbalanced data. Inspect false passes in particular: these are human failures that the automated judge allowed through.
 
+## Estimate the true pass rate
+
+A judge's raw pass rate on new outputs is biased by its own errors. Once a judge is validated, `vectory estimate` corrects the observed rate with the Rogan-Gladen estimator, `(observed + TNR - 1) / (TPR + TNR - 1)`, using the TPR and TNR measured on the held-out test set:
+
+```bash
+vectory estimate production-judged.jsonl \
+  --judge-column judge_label \
+  --test-set judge-splits/test.jsonl \
+  --human-column human_label \
+  --split-manifest judge-splits/split_manifest.json \
+  --min-pass-rate 0.90 \
+  --out success-estimate.json
+```
+
+The report includes the observed rate, the corrected rate, and a 95% bootstrap interval. The interval resamples the test pairs 20,000 times by default and holds the observed rate fixed, so it reflects uncertainty in the judge's accuracy. With `--min-pass-rate`, the command exits nonzero unless the interval's lower bound reaches the threshold. Correction is refused when TPR + TNR is 1 or less, because such a judge carries no signal. Raising TPR usually narrows the interval the most.
+
+Use a random sample of outputs for the estimate. Coverage-biased discovery samples do not represent production prevalence.
+
 ## Use with Vectory Benchmark
 
 The human-grounded workflow captures product-specific expectations. Vectory Benchmark supplies complementary deterministic and proof-grounded agent checks:

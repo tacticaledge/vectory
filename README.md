@@ -59,6 +59,17 @@ vectory validate-judge judge-splits/test.jsonl \
   --out judge-validation.json
 ```
 
+Estimate the true pass rate of judged outputs, corrected for judge error, with a 95% interval:
+
+```bash
+vectory estimate production-judged.jsonl \
+  --judge-column judge_label \
+  --test-set judge-splits/test.jsonl \
+  --human-column human_label \
+  --split-manifest judge-splits/split_manifest.json \
+  --min-pass-rate 0.90
+```
+
 See the [human-grounded evaluation workflow](docs/evaluation_workflow.md) for the app flow, artifact schema, validation metrics, and CI behavior.
 
 Run the included agent benchmark example from the CLI:
