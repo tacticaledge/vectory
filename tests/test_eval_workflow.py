@@ -297,6 +297,33 @@ def test_leakage_check_passes_when_examples_come_from_train_only():
     assert report["records_with_field"] == {"input": 4, "output": 4}
 
 
+def test_leakage_check_matches_multiline_record_text():
+    records = labeled_split_records()
+    records[1]["input"] = "Customer asks about the refund policy\nfor order 001"
+    evaluator = train_seeded_evaluator(records)
+
+    report = detect_evaluator_leakage(evaluator, {"test": [records[1]]})
+
+    assert report["clean"] is False
+    assert report["matches"][0]["field"] == "input"
+    assert report["matches"][0]["location"] == "expert_examples[1].input"
+
+
+def test_leakage_check_is_not_clean_when_no_compared_field_exists():
+    records = labeled_split_records()
+
+    report = detect_evaluator_leakage(
+        train_seeded_evaluator(records),
+        {"test": [{"prompt": "Customer asks about the refund policy for order 011"}]},
+    )
+
+    assert report["records_with_field"] == {"input": 0, "output": 0}
+    assert report["fields_without_records"] == ["input", "output"]
+    assert report["matches"] == []
+    assert report["clean"] is False
+    assert "compared no held-out records" in describe_leakage(report)
+
+
 def test_leakage_check_skips_incidental_short_texts():
     records = labeled_split_records()
 

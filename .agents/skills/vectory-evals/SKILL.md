@@ -33,7 +33,7 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
    `vectory check-leakage EVALUATOR_JSON --split-manifest SPLITS/split_manifest.json`
 
-   A nonzero exit status lists every dev or test record whose normalized text appears in the prompt, examples, definitions, or rule. Remove or replace those examples; never move the leaked records into another split.
+   A nonzero exit status lists every dev or test record whose normalized text appears in the prompt, examples, definitions, or rule. Remove or replace those examples; never move the leaked records into another split. The check also fails when the held-out records carry none of the compared fields, because it then proved nothing; name the real columns with `--text-fields`.
 
 6. Once evaluator predictions have been added to the held-out test records, run:
 

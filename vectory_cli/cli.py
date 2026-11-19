@@ -396,14 +396,19 @@ def run_check_leakage(args: argparse.Namespace) -> int:
     checked = ", ".join(f"{name}={count}" for name, count in sorted(report["checked_splits"].items()))
     print(f"Checked records: {checked}")
     print(f"Compared fields: {', '.join(report['text_fields'])}")
-    if not any(report["records_with_field"].values()):
-        print("Warning: none of the compared fields exist in these records; pass --text-fields.")
+    if report["fields_without_records"]:
+        print(f"Fields absent from every record: {', '.join(report['fields_without_records'])}")
     for match in report["matches"]:
         print(
             f"Leak: {match['split']}[{match['record_index']}] field {match['field']} "
             f"appears in {match['location']}"
         )
-    print("Leakage: CLEAN" if report["clean"] else f"Leakage: {report['leaked_records']} records")
+    if report["clean"]:
+        print("Leakage: CLEAN")
+    elif report["matches"]:
+        print(f"Leakage: {report['leaked_records']} records")
+    else:
+        print(f"Leakage: UNCHECKED, {describe_leakage(report)}")
     return 0 if report["clean"] else 1
 
 

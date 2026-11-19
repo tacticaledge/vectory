@@ -13,17 +13,24 @@ from .schemas import EvaluatorDefinition, parse_evaluator_definition
 HELD_OUT_SPLITS = ("dev", "test")
 DEFAULT_MINIMUM_CHARACTERS = 8
 _WHITESPACE = re.compile(r"\s+")
+_ESCAPED_WHITESPACE = re.compile(r"\\[nrtf]|\\u000[bB]")
 
 
 def normalize_leakage_text(value: Any) -> str:
-    """Lowercase and collapse whitespace so formatting alone cannot hide a reused record."""
+    """Lowercase and collapse whitespace so formatting alone cannot hide a reused record.
+
+    Serializing a structure escapes the newlines and tabs inside it, so those escapes
+    become whitespace again before collapsing. Otherwise a multiline record field would
+    never match the serialized expert example that embeds it.
+    """
     if value is None:
         return ""
-    text = (
-        value
-        if isinstance(value, str)
-        else json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
-    )
+    if isinstance(value, str):
+        text = value
+    else:
+        text = _ESCAPED_WHITESPACE.sub(
+            " ", json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        )
     return _WHITESPACE.sub(" ", text).strip().casefold()
 
 
@@ -61,7 +68,9 @@ def detect_evaluator_leakage(
     Texts shorter than ``minimum_characters`` are skipped, because incidental short
     phrases match instruction wording without indicating leakage. Only the first
     matching location per record field is reported, so one reused record stays one
-    finding.
+    finding. A report is clean only when no record matched *and* at least one compared
+    field was present in the records, so a mismatched field configuration cannot pass
+    as a completed check.
     """
     if minimum_characters < 1:
         raise ValueError("Minimum leakage comparison length must be positive")
@@ -100,23 +109,34 @@ def detect_evaluator_leakage(
                         "characters": len(text),
                     }
                 )
+    fields_without_records = [field for field in fields if not records_with_field[field]]
     return {
         "schema_version": "1.0",
         "evaluator_id": definition.evaluator_id,
         "checked_splits": {name: len(records) for name, records in splits.items()},
         "text_fields": fields,
         "records_with_field": records_with_field,
+        "fields_without_records": fields_without_records,
         "minimum_characters": minimum_characters,
         "skipped_short_texts": skipped_short,
         "matches": matches,
         "leaked_records": len({(match["split"], match["record_index"]) for match in matches}),
-        "clean": not matches,
+        "clean": not matches and any(records_with_field.values()),
     }
 
 
 def describe_leakage(report: Mapping[str, Any]) -> str:
     """Summarize a leakage report as one gate-blocker sentence."""
     matches = list(report.get("matches") or [])
+    if not matches:
+        unchecked = (
+            report.get("fields_without_records") or report.get("text_fields") or ["the record"]
+        )
+        return (
+            "leakage check compared no held-out records for "
+            f"{', '.join(str(field) for field in unchecked)}: "
+            "point --text-fields at fields these records carry"
+        )
     splits = sorted({str(match["split"]) for match in matches})
     locations = ", ".join(
         f"{match['split']}[{match['record_index']}].{match['field']} in {match['location']}"

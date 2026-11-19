@@ -147,6 +147,7 @@ class LeakageReport(StrictModel):
     checked_splits: dict[str, int]
     text_fields: list[str] = Field(min_length=1)
     records_with_field: dict[str, int]
+    fields_without_records: list[str] = Field(default_factory=list)
     minimum_characters: int = Field(ge=1)
     skipped_short_texts: int = Field(ge=0)
     matches: list[LeakageMatch] = Field(default_factory=list)

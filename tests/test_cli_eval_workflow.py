@@ -304,6 +304,94 @@ def test_check_leakage_reports_held_out_records_in_an_evaluator(tmp_path, capsys
         )
 
 
+def test_check_leakage_fails_when_no_compared_field_exists(tmp_path, capsys):
+    split_dir, _, workspace = _text_split_fixture(tmp_path)
+    assert main(
+        [
+            "promote",
+            str(workspace),
+            "Unsupported claim",
+            "--errors-reviewed",
+            "--train-split",
+            str(split_dir / "train.jsonl"),
+            "--input-fields",
+            "input",
+            "output",
+        ]
+    ) == 0
+    evaluator_path = workspace / "evaluators" / "failure-unsupported-claim.json"
+    report = tmp_path / "leakage.json"
+
+    assert main(
+        [
+            "check-leakage",
+            str(evaluator_path),
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
+            "--text-fields",
+            "question",
+            "--out",
+            str(report),
+        ]
+    ) == 1
+
+    output = capsys.readouterr().out
+    assert "Fields absent from every record: question" in output
+    assert "Leakage: UNCHECKED" in output
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["clean"] is False
+    assert payload["matches"] == []
+    assert payload["fields_without_records"] == ["question"]
+
+
+def test_validate_judge_blocks_a_leakage_check_that_compared_nothing(tmp_path, capsys):
+    split_dir, _, workspace = _text_split_fixture(tmp_path)
+    assert main(
+        [
+            "promote",
+            str(workspace),
+            "Unsupported claim",
+            "--errors-reviewed",
+            "--train-split",
+            str(split_dir / "train.jsonl"),
+            "--input-fields",
+            "input",
+            "output",
+        ]
+    ) == 0
+    report = tmp_path / "validation.json"
+
+    assert main(
+        [
+            "validate-judge",
+            str(split_dir / "test.jsonl"),
+            "--human-column",
+            "human_label",
+            "--judge-column",
+            "judge_label",
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
+            "--bootstrap-iterations",
+            "50",
+            "--evaluator",
+            str(workspace / "evaluators" / "failure-unsupported-claim.json"),
+            "--text-fields",
+            "question",
+            "--out",
+            str(report),
+        ]
+    ) == 1
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["gate_passed"] is False
+    assert payload["leakage"]["clean"] is False
+    assert payload["gate_blockers"] == [
+        "leakage check compared no held-out records for question: "
+        "point --text-fields at fields these records carry"
+    ]
+    assert "Blocker: leakage check compared no held-out records" in capsys.readouterr().out
+
+
 def test_validate_judge_refuses_an_evaluator_that_saw_the_test_split(tmp_path, capsys):
     split_dir, test_records, workspace = _text_split_fixture(tmp_path)
     evaluator_path = workspace / "evaluators" / "leaky.json"
@@ -412,7 +500,12 @@ def _validated_judge_fixture(tmp_path):
     write_jsonl(
         labels,
         [
-            {"id": index, "human_label": "Pass" if index % 2 == 0 else "Fail", "judge_label": ""}
+            {
+                "id": index,
+                "output": f"Agent answer {index:03d} about the refund window",
+                "human_label": "Pass" if index % 2 == 0 else "Fail",
+                "judge_label": "",
+            }
             for index in range(80)
         ],
     )
@@ -786,7 +879,12 @@ def test_validate_judge_requires_all_human_lifecycle_checkpoints(tmp_path):
     write_jsonl(
         labels,
         [
-            {"id": index, "human": label, "judge": label}
+            {
+                "id": index,
+                "output": f"Agent answer {label} {index} about the refund window",
+                "human": label,
+                "judge": label,
+            }
             for label in ("Pass", "Fail")
             for index in range(4)
         ],
