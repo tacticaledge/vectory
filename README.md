@@ -289,7 +289,9 @@ vectory benchmark data/vectory_benchmark/example_policy_proof_submission.json \
   --report-out /tmp/vectory-report
 ```
 
-The report bundle includes `index.html`, `scores.json`, `leaderboard.json`, `pathologies.json`, `claim_evidence_table.json`, `checkpoints.json`, and `benchmark_card.json`.
+The report bundle includes `index.html`, `scores.json`, `leaderboard.json`, `task_reliability.json`, `pathologies.json`, `claim_evidence_table.json`, `checkpoints.json`, and `benchmark_card.json`.
+
+Submit several runs of the same `task_id` to get reliability metrics. The leaderboard, the app, and the report bundle then add the unbiased `pass@k` (at least one success in `k` tries) and `pass^k` (success on every one of `k` tries) estimators per task and overall, alongside the existing `pass_at_1` and `robust_pass_at_5` columns. See [docs/vectory_benchmark.md](docs/vectory_benchmark.md) for the formulas and how `k` is chosen.
 
 Run a release gate:
 

@@ -43,6 +43,8 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
 7. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
 
+8. When reliability under repetition matters, submit several runs per `task_id` to `vectory benchmark`. The leaderboard and report bundle then add unbiased `pass@k` and `pass^k`; quote `pass^k`, success on every one of `k` tries, for production readiness, and say which `k` and how many repeated tasks it covers.
+
 ## Preserve these invariants
 
 - Diverse cluster representatives and related-example suggestions are for discovery, never prevalence estimates.

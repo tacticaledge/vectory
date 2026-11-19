@@ -7,7 +7,29 @@ from statistics import mean
 
 import pandas as pd
 
+from components.vectory_benchmark.reliability import reliability_summary, submission_reliability_k
 from components.vectory_benchmark.schemas import LeaderboardEntry, RunScore
+
+
+_NULLABLE_COLUMNS = ("reliability_k", "pass_at_k", "pass_hat_k", "reliability_tasks")
+
+
+def _keep_missing_as_none(frame: pd.DataFrame) -> pd.DataFrame:
+    """Store missing reliability values as ``None`` rather than float ``NaN``.
+
+    pandas coerces a column that mixes numbers with ``None`` into floats, and the
+    resulting ``NaN`` serializes as the non-standard ``NaN`` literal, which makes
+    ``leaderboard.json`` unparseable for strict JSON consumers.
+    """
+    for column in _NULLABLE_COLUMNS:
+        if column not in frame.columns or not frame[column].isna().any():
+            continue
+        frame[column] = pd.Series(
+            [None if pd.isna(value) else value for value in frame[column]],
+            index=frame.index,
+            dtype=object,
+        )
+    return frame
 
 
 def _robust_pass_at_5(scores: list[RunScore]) -> float:
@@ -29,6 +51,8 @@ def build_leaderboard(scores: list[RunScore]) -> pd.DataFrame:
     for score in scores:
         grouped[(score.agent, score.model)].append(score)
 
+    shared_k = submission_reliability_k(scores)
+
     entries: list[LeaderboardEntry] = []
     for (agent, model), group in grouped.items():
         vectory_score = mean(score.vectory_score for score in group)
@@ -47,6 +71,7 @@ def build_leaderboard(scores: list[RunScore]) -> pd.DataFrame:
             else float(score.facts.get("agent_control_index", score.dimensions["agent_control"].score))
             for score in group
         )
+        reliability = reliability_summary(group, k=shared_k)
         entries.append(
             LeaderboardEntry(
                 rank=0,
@@ -57,6 +82,10 @@ def build_leaderboard(scores: list[RunScore]) -> pd.DataFrame:
                 vectory_score=round(vectory_score, 4),
                 pass_at_1=round(pass_at_1, 4),
                 robust_pass_at_5=round(_robust_pass_at_5(group), 4),
+                reliability_k=reliability["reliability_k"],
+                pass_at_k=reliability["pass_at_k"],
+                pass_hat_k=reliability["pass_hat_k"],
+                reliability_tasks=reliability["reliability_tasks"],
                 productive_work_ratio=round(productive_work_ratio, 4),
                 pathology_risk=round(pathology_risk, 4),
                 agent_control_index=round(agent_control_index, 4),
@@ -75,4 +104,4 @@ def build_leaderboard(scores: list[RunScore]) -> pd.DataFrame:
     for index, entry in enumerate(entries, start=1):
         entry.rank = index
 
-    return pd.DataFrame([entry.model_dump() for entry in entries])
+    return _keep_missing_as_none(pd.DataFrame([entry.model_dump() for entry in entries]))

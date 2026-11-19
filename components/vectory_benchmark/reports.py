@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from components.vectory_benchmark.reliability import reliability_summary, task_reliability_rows
 from components.vectory_benchmark.schemas import (
     AgentRun,
     BenchmarkSuite,
@@ -263,10 +264,12 @@ def write_report_bundle(
     pathology_data = pathology_rows(scores)
     claim_data = claim_evidence_rows(runs, scores)
     checkpoint_data = checkpoint_rows(runs, scores)
+    reliability_data = task_reliability_rows(scores)
     card = benchmark_card(suite, tasks)
 
     _write_json(output_dir / "scores.json", score_data)
     _write_json(output_dir / "leaderboard.json", leaderboard_rows)
+    _write_json(output_dir / "task_reliability.json", reliability_data)
     _write_json(output_dir / "pathologies.json", pathology_data)
     _write_json(output_dir / "claim_evidence_table.json", claim_data)
     _write_json(output_dir / "checkpoints.json", checkpoint_data)
@@ -278,6 +281,7 @@ def write_report_bundle(
     _write_csv(output_dir / "pathologies.csv", pathology_data)
     _write_csv(output_dir / "claim_evidence_table.csv", claim_data)
     _write_csv(output_dir / "checkpoints.csv", checkpoint_data)
+    _write_csv(output_dir / "task_reliability.csv", reliability_data)
     (output_dir / "index.html").write_text(
         _render_html_report(
             suite=suite,
@@ -286,6 +290,7 @@ def write_report_bundle(
             pathology_data=pathology_data,
             claim_data=claim_data,
             checkpoint_data=checkpoint_data,
+            reliability_data=reliability_data,
             gate=gate,
         ),
         encoding="utf-8",
@@ -328,6 +333,7 @@ def _render_html_report(
     pathology_data: list[dict[str, Any]],
     claim_data: list[dict[str, Any]],
     checkpoint_data: list[dict[str, Any]],
+    reliability_data: list[dict[str, Any]],
     gate: GateResult | None,
 ) -> str:
     mean_score = sum(score.vectory_score for score in scores) / len(scores) if scores else 0.0
@@ -335,6 +341,23 @@ def _render_html_report(
     gate_label = "not evaluated"
     if gate is not None:
         gate_label = "passed" if gate.passed else "failed"
+    reliability = reliability_summary(scores)
+    reliability_cards = ""
+    reliability_section = '<p class="muted">No task was run more than once.</p>'
+    if reliability["reliability_k"] is not None:
+        k = reliability["reliability_k"]
+        reliability_cards = (
+            f'<div class="card"><div class="muted">Pass@{k}</div>'
+            f'<div class="value">{reliability["pass_at_k"]:.1%}</div></div>'
+            f'<div class="card"><div class="muted">Pass^{k}</div>'
+            f'<div class="value">{reliability["pass_hat_k"]:.1%}</div></div>'
+        )
+        reliability_section = (
+            f'<p class="muted">Unbiased estimates over {reliability["reliability_tasks"]} '
+            f"task(s) with at least {k} runs. Pass@{k} is any success in {k} tries; "
+            f"Pass^{k} is success on every one of {k} tries.</p>"
+            + _html_table(reliability_data[:50])
+        )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -367,9 +390,12 @@ def _render_html_report(
     <div class="card"><div class="muted">Pass@1</div><div class="value">{(passed / len(scores)) if scores else 0:.1%}</div></div>
     <div class="card"><div class="muted">Mean score</div><div class="value">{mean_score:.3f}</div></div>
     <div class="card"><div class="muted">Gate</div><div class="value">{html.escape(gate_label)}</div></div>
+    {reliability_cards}
   </div>
   <h2>Run Scores</h2>
   {_html_table(score_data[:50])}
+  <h2>Task Reliability</h2>
+  {reliability_section}
   <h2>Pathologies</h2>
   {_html_table(pathology_data[:50]) if pathology_data else '<p class="muted">None detected.</p>'}
   <h2>Claim Evidence</h2>
@@ -377,7 +403,7 @@ def _render_html_report(
   <h2>Checkpoints</h2>
   {_html_table(checkpoint_data[:50]) if checkpoint_data else '<p class="muted">No checkpoint events submitted.</p>'}
   <h2>Artifacts</h2>
-  <p class="muted">This bundle includes <code>scores.json</code>, <code>leaderboard.json</code>, <code>pathologies.json</code>, <code>claim_evidence_table.json</code>, <code>checkpoints.json</code>, and <code>benchmark_card.json</code>.</p>
+  <p class="muted">This bundle includes <code>scores.json</code>, <code>leaderboard.json</code>, <code>task_reliability.json</code>, <code>pathologies.json</code>, <code>claim_evidence_table.json</code>, <code>checkpoints.json</code>, and <code>benchmark_card.json</code>.</p>
 </main>
 </body>
 </html>
