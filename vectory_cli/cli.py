@@ -14,12 +14,17 @@ from importlib import resources
 from pathlib import Path
 
 from components.eval_workflow import (
+    DEFAULT_MINIMUM_CHARACTERS,
+    HELD_OUT_SPLITS,
     JudgeValidationReport,
+    LeakageReport,
     SuccessRateReport,
     archive_review_workspace,
     bootstrap_metric_intervals,
     build_evaluator_definition,
     dataframe_to_records,
+    describe_leakage,
+    detect_evaluator_leakage,
     dump_evaluator_definition,
     estimate_success_rate,
     initialize_review_workspace,
@@ -30,6 +35,7 @@ from components.eval_workflow import (
     save_jsonl_records,
     select_diverse_samples,
     split_labeled_records,
+    train_split_expert_examples,
     validate_evaluator_labels,
 )
 
@@ -174,6 +180,51 @@ def _records_sha256(records: list[dict], fields: list[str] | None = None) -> str
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _verify_split_artifact(
+    name: str,
+    artifact: object,
+    records: list[dict],
+    judge_label_column: str,
+) -> list[str]:
+    """Check a loaded split file against the counts and hashes recorded in the manifest.
+
+    Split files stay editable after they are written, so an altered or truncated
+    partition would otherwise be read as if it were the original held-out data.
+    Returns the immutable fields whose contents matched the manifest.
+    """
+    if not isinstance(artifact, dict):
+        raise TypeError(f"Split manifest does not contain {name} artifact provenance")
+    fields = artifact.get("provenance_fields")
+    field_hashes = artifact.get("field_sha256")
+    expected_count = artifact.get("record_count")
+    mutable_fields = artifact.get("mutable_fields")
+    if mutable_fields != [judge_label_column]:
+        raise ValueError("Split manifest must designate exactly one mutable judge prediction field")
+    if (
+        not isinstance(fields, list)
+        or not all(isinstance(field, str) for field in fields)
+        or not isinstance(field_hashes, dict)
+        or not all(
+            isinstance(field, str) and isinstance(digest, str)
+            for field, digest in field_hashes.items()
+        )
+        or not isinstance(expected_count, int)
+    ):
+        raise ValueError(f"Split manifest {name} provenance is incomplete")
+    verified_fields = [field for field in fields if field not in mutable_fields]
+    if not verified_fields:
+        raise ValueError(f"Split manifest {name} provenance pins no immutable field")
+    fields_match = all(
+        field_hashes.get(field) == _records_sha256(records, [field])
+        for field in verified_fields
+    )
+    if len(records) != expected_count or not fields_match:
+        raise ValueError(
+            f"Dataset does not match the untouched {name} partition in the split manifest"
+        )
+    return verified_fields
+
+
 def _verify_test_split_provenance(
     dataset: Path,
     records: list[dict],
@@ -193,41 +244,16 @@ def _verify_test_split_provenance(
             "Judge label column does not match the prediction field designated by the split manifest"
         )
     test_artifact = (manifest.get("artifacts") or {}).get("test")
-    if not isinstance(test_artifact, dict):
-        raise TypeError("Split manifest does not contain test artifact provenance")
-    fields = test_artifact.get("provenance_fields")
-    field_hashes = test_artifact.get("field_sha256")
-    expected_count = test_artifact.get("record_count")
-    if (
-        not isinstance(fields, list)
-        or not all(isinstance(field, str) for field in fields)
-        or not isinstance(field_hashes, dict)
-        or not all(
-            isinstance(field, str) and isinstance(digest, str)
-            for field, digest in field_hashes.items()
-        )
-        or not isinstance(expected_count, int)
-    ):
-        raise ValueError("Split manifest test provenance is incomplete")
-    mutable_fields = test_artifact.get("mutable_fields")
-    if mutable_fields != [judge_label_column]:
-        raise ValueError("Split manifest must designate exactly one mutable judge prediction field")
-    verified_fields = [field for field in fields if field not in mutable_fields]
-    fields_match = all(
-        field_hashes.get(field) == _records_sha256(records, [field])
-        for field in verified_fields
+    verified_fields = _verify_split_artifact(
+        "test", test_artifact, records, judge_label_column
     )
-    if len(records) != expected_count or not fields_match:
-        raise ValueError(
-            "Validation dataset does not match the untouched test partition in the split manifest"
-        )
     return {
         "verified": True,
         "split_manifest": str(manifest_path),
         "test_artifact": str(dataset),
         "verified_fields": verified_fields,
         "excluded_prediction_field": judge_label_column,
-        "record_count": expected_count,
+        "record_count": len(records),
     }
 
 
@@ -287,6 +313,15 @@ def run_promote(args: argparse.Namespace) -> int:
         available = ", ".join(sorted(taxonomy)) or "none"
         raise ValueError(f"Unknown failure mode {args.failure_mode!r}. Available modes: {available}")
     fields = args.input_fields or ["input", "output", "reference", "trace"]
+    if args.train_split:
+        expert_examples = train_split_expert_examples(
+            _load_records(args.train_split),
+            input_fields=fields,
+            label_field=args.train_label_column,
+            critique_field=args.train_critique_column,
+        )
+        source_ids = [example["source_id"] for example in expert_examples]
+        return _write_promoted_evaluator(args, taxonomy, fields, expert_examples, source_ids)
     failure_examples = []
     pass_examples = []
     for key, annotation in workspace["annotations"].items():
@@ -313,6 +348,16 @@ def run_promote(args: argparse.Namespace) -> int:
             pass_examples.append(example)
     expert_examples = [*failure_examples[:4], *pass_examples[:4]]
     source_ids = [example["annotation_id"] for example in expert_examples]
+    return _write_promoted_evaluator(args, taxonomy, fields, expert_examples, source_ids)
+
+
+def _write_promoted_evaluator(
+    args: argparse.Namespace,
+    taxonomy: dict,
+    fields: list[str],
+    expert_examples: list[dict],
+    source_ids: list[str],
+) -> int:
     evaluator = build_evaluator_definition(
         args.failure_mode,
         taxonomy[args.failure_mode],
@@ -330,10 +375,78 @@ def run_promote(args: argparse.Namespace) -> int:
     else:
         target = save_evaluator_definition(args.workspace, evaluator)
     print(f"Created draft evaluator: {target}")
+    print(
+        f"Attached {len(expert_examples)} expert examples from "
+        f"{'the train split' if args.train_split else 'workspace annotations'}."
+    )
     if not args.errors_reviewed:
         print("Checkpoint pending: review and fix obvious product errors before judge automation.")
     print("Status: draft_unvalidated. Validate it against held-out human labels before using it as a gate.")
+    print("Run 'vectory check-leakage' to confirm no dev or test record reached this definition.")
     return 0
+
+
+def _held_out_split_records(manifest_path: Path, names: list[str]) -> dict[str, list[dict]]:
+    """Load the held-out splits named in a manifest after checking their provenance.
+
+    A leakage report only means something when it was compared against the partition
+    the manifest recorded, so every loaded split must still match its recorded record
+    count and immutable field hashes.
+    """
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != "1.0":
+        raise ValueError("Split manifest must use schema_version 1.0")
+    judge_label_column = manifest.get("judge_label_column")
+    if not isinstance(judge_label_column, str) or not judge_label_column:
+        raise ValueError("Split manifest does not name the mutable judge prediction field")
+    artifacts = manifest.get("artifacts") or {}
+    splits = {}
+    for name in names:
+        if name not in HELD_OUT_SPLITS:
+            raise ValueError(
+                f"Leakage checks only read held-out splits, not {name!r}. "
+                f"Available splits: {', '.join(HELD_OUT_SPLITS)}"
+            )
+        artifact = artifacts.get(name)
+        if not isinstance(artifact, dict) or not artifact.get("path"):
+            raise ValueError(f"Split manifest does not describe a {name} artifact")
+        records = _load_records(manifest_path.parent / str(artifact["path"]))
+        _verify_split_artifact(name, artifact, records, judge_label_column)
+        splits[name] = records
+    return splits
+
+
+def run_check_leakage(args: argparse.Namespace) -> int:
+    evaluator = json.loads(args.evaluator.read_text(encoding="utf-8"))
+    splits = _held_out_split_records(args.split_manifest, args.splits)
+    report = detect_evaluator_leakage(
+        evaluator,
+        splits,
+        text_fields=args.text_fields,
+        minimum_characters=args.min_characters,
+    )
+    typed_report = LeakageReport.model_validate(report)
+    if args.out:
+        _write_json(args.out, typed_report.model_dump(mode="json", by_alias=True))
+        print(f"Wrote leakage report: {args.out}")
+    print(f"Verified split provenance against: {args.split_manifest}")
+    checked = ", ".join(f"{name}={count}" for name, count in sorted(report["checked_splits"].items()))
+    print(f"Checked records: {checked}")
+    print(f"Compared fields: {', '.join(report['text_fields'])}")
+    if report["fields_without_records"]:
+        print(f"Fields absent from every record: {', '.join(report['fields_without_records'])}")
+    for match in report["matches"]:
+        print(
+            f"Leak: {match['split']}[{match['record_index']}] field {match['field']} "
+            f"appears in {match['location']}"
+        )
+    if report["clean"]:
+        print("Leakage: CLEAN")
+    elif report["matches"]:
+        print(f"Leakage: {report['leaked_records']} records")
+    else:
+        print(f"Leakage: UNCHECKED, {describe_leakage(report)}")
+    return 0 if report["clean"] else 1
 
 
 def run_split_labels(args: argparse.Namespace) -> int:
@@ -475,6 +588,13 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         "groups": group_reports,
     }
     if evaluator is not None:
+        leakage = detect_evaluator_leakage(
+            evaluator,
+            {"test": records},
+            text_fields=args.text_fields,
+            minimum_characters=args.min_leakage_characters,
+        )
+        report["leakage"] = leakage
         lifecycle = evaluator.lifecycle_checkpoints
         checkpoint_labels = {
             "human_review_completed": "human review is incomplete",
@@ -483,15 +603,17 @@ def run_validate_judge(args: argparse.Namespace) -> int:
                 "expert examples do not include both Pass and Fail critiques"
             ),
         }
-        incomplete_checkpoints = [
+        blockers = [
             message
             for checkpoint, message in checkpoint_labels.items()
             if getattr(lifecycle, checkpoint) is not True
         ]
-        if incomplete_checkpoints:
+        if not leakage["clean"]:
+            blockers.append(describe_leakage(leakage))
+        if blockers:
             gate_passed = False
             report["gate_passed"] = False
-            report["gate_blockers"] = incomplete_checkpoints
+            report["gate_blockers"] = blockers
 
     typed_report = JudgeValidationReport.model_validate(report)
     if evaluator is not None:
@@ -510,6 +632,8 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         f"TNR={metrics['tnr'] if metrics['tnr'] is not None else 'n/a'}, "
         f"balanced_accuracy={metrics['balanced_accuracy'] if metrics['balanced_accuracy'] is not None else 'n/a'}"
     )
+    for blocker in typed_report.gate_blockers:
+        print(f"Blocker: {blocker}")
     print("Gate: PASS" if gate_passed else "Gate: FAIL")
     return 0 if gate_passed else 1
 
@@ -747,8 +871,64 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Confirm obvious product errors were fixed or reviewed before judge automation.",
     )
+    promote_parser.add_argument(
+        "--train-split",
+        type=Path,
+        help=(
+            "Train split JSONL whose labeled, critiqued records supply the judge examples "
+            "instead of the first workspace annotations."
+        ),
+    )
+    promote_parser.add_argument(
+        "--train-label-column",
+        default="human_label",
+        help="Pass/Fail label column in the train split. Default: human_label.",
+    )
+    promote_parser.add_argument(
+        "--train-critique-column",
+        default="critique",
+        help="Expert critique column in the train split. Default: critique.",
+    )
     promote_parser.add_argument("--out", type=Path, help="Optional output path outside the workspace.")
     promote_parser.set_defaults(func=run_promote)
+
+    leakage_parser = subparsers.add_parser(
+        "check-leakage",
+        help="Report held-out records whose text appears in an evaluator definition.",
+    )
+    leakage_parser.add_argument("evaluator", type=Path, help="Evaluator JSON definition.")
+    leakage_parser.add_argument(
+        "--split-manifest",
+        type=Path,
+        required=True,
+        help="Manifest written by split-labels; locates the held-out split files.",
+    )
+    leakage_parser.add_argument(
+        "--splits",
+        nargs="+",
+        choices=list(HELD_OUT_SPLITS),
+        default=list(HELD_OUT_SPLITS),
+        help=(
+            "Held-out split names to check. Train examples belong in the definition, "
+            f"so only {' and '.join(HELD_OUT_SPLITS)} can be checked. Default: dev test."
+        ),
+    )
+    leakage_parser.add_argument(
+        "--text-fields",
+        nargs="+",
+        help="Record fields compared against the definition. Default: the evaluator's input fields.",
+    )
+    leakage_parser.add_argument(
+        "--min-characters",
+        type=int,
+        default=DEFAULT_MINIMUM_CHARACTERS,
+        help=(
+            "Ignore normalized texts shorter than this many characters. "
+            f"Default: {DEFAULT_MINIMUM_CHARACTERS}."
+        ),
+    )
+    leakage_parser.add_argument("--out", type=Path, help="Optional JSON leakage report path.")
+    leakage_parser.set_defaults(func=run_check_leakage)
 
     split_parser = subparsers.add_parser(
         "split-labels",
@@ -801,6 +981,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--group-by",
         nargs="+",
         help="Report metrics by dimensions such as feature, scenario, or persona.",
+    )
+    validate_parser.add_argument(
+        "--text-fields",
+        nargs="+",
+        help=(
+            "Test-record fields checked for leakage into the evaluator definition. "
+            "Default: the evaluator's input fields."
+        ),
+    )
+    validate_parser.add_argument(
+        "--min-leakage-characters",
+        type=int,
+        default=DEFAULT_MINIMUM_CHARACTERS,
+        help=(
+            "Ignore normalized texts shorter than this many characters. "
+            f"Default: {DEFAULT_MINIMUM_CHARACTERS}."
+        ),
     )
     validate_parser.set_defaults(func=run_validate_judge)
 

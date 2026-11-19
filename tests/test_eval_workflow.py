@@ -15,6 +15,8 @@ from components.eval_workflow import (
     build_review_bundle,
     corrected_success_rate,
     dataframe_to_records,
+    describe_leakage,
+    detect_evaluator_leakage,
     estimate_success_rate,
     find_related_records,
     initialize_review_workspace,
@@ -25,6 +27,7 @@ from components.eval_workflow import (
     select_diverse_samples,
     split_labeled_records,
     summarize_coverage,
+    train_split_expert_examples,
     validate_evaluator_definition,
     validate_evaluator_labels,
 )
@@ -183,6 +186,261 @@ def test_promoted_evaluator_is_binary_and_unvalidated(tmp_path):
     assert len(evaluator["expert_examples"]) == 2
     assert "The output invents the 90-day period" in evaluator["prompt"]
     assert path.is_file()
+
+
+def labeled_split_records(count=12):
+    return [
+        {
+            "id": index,
+            "input": f"Customer asks about the refund policy for order {index:03d}",
+            "output": f"Agent answer {index:03d} about the refund window",
+            "human_label": "Fail" if index % 2 else "Pass",
+            "critique": f"Critique {index:03d}: the agent invents a policy detail.",
+        }
+        for index in range(count)
+    ]
+
+
+def train_seeded_evaluator(records):
+    return build_evaluator_definition(
+        "Unsupported claim",
+        {"description": "The answer asserts facts absent from the supplied evidence."},
+        input_fields=["input", "output"],
+        source_annotation_ids=["train:1", "train:0"],
+        expert_examples=train_split_expert_examples(
+            records,
+            input_fields=["input", "output"],
+            label_field="human_label",
+            critique_field="critique",
+        ),
+        errors_reviewed=True,
+    )
+
+
+def test_train_split_examples_are_balanced_and_attributed():
+    examples = train_split_expert_examples(
+        labeled_split_records(),
+        input_fields=["input", "output"],
+        label_field="human_label",
+        critique_field="critique",
+    )
+
+    assert [example["result"] for example in examples] == ["Fail"] * 4 + ["Pass"] * 4
+    assert all(set(example["input"]) == {"input", "output"} for example in examples)
+    assert [example["source_id"] for example in examples[:4]] == [
+        "train:1",
+        "train:3",
+        "train:5",
+        "train:7",
+    ]
+
+
+def test_train_split_examples_skip_records_without_a_critique():
+    records = labeled_split_records()
+    records[3]["critique"] = "   "
+
+    examples = train_split_expert_examples(
+        records,
+        input_fields=["input"],
+        label_field="human_label",
+        critique_field="critique",
+    )
+
+    assert [example["source_id"] for example in examples[:4]] == [
+        "train:1",
+        "train:5",
+        "train:7",
+        "train:9",
+    ]
+    with pytest.raises(ValueError, match="critique"):
+        train_split_expert_examples(
+            records,
+            input_fields=["input"],
+            label_field="human_label",
+            critique_field="expert_note",
+        )
+    with pytest.raises(ValueError, match="label field"):
+        train_split_expert_examples(
+            records,
+            input_fields=["input"],
+            label_field="verdict",
+            critique_field="critique",
+        )
+
+
+def test_train_split_examples_reject_records_without_input_content():
+    records = labeled_split_records()
+    records[1]["input"] = "   "
+    records[1]["output"] = None
+
+    with pytest.raises(ValueError, match="record 1 carries no content"):
+        train_split_expert_examples(
+            records,
+            input_fields=["input", "output"],
+            label_field="human_label",
+            critique_field="critique",
+        )
+    with pytest.raises(ValueError, match="no content"):
+        train_split_expert_examples(
+            labeled_split_records(),
+            input_fields=["question"],
+            label_field="human_label",
+            critique_field="critique",
+        )
+    with pytest.raises(ValueError, match="one input field is required"):
+        train_split_expert_examples(
+            labeled_split_records(),
+            input_fields=[],
+            label_field="human_label",
+            critique_field="critique",
+        )
+
+
+def test_train_split_examples_keep_records_missing_an_optional_field():
+    records = labeled_split_records()
+    for record in records:
+        record.pop("output")
+
+    examples = train_split_expert_examples(
+        records,
+        input_fields=["input", "output"],
+        label_field="human_label",
+        critique_field="critique",
+    )
+
+    assert all(set(example["input"]) == {"input"} for example in examples)
+
+
+def test_train_split_examples_require_both_verdicts():
+    records = labeled_split_records()
+    for record in records:
+        if record["human_label"] == "Pass":
+            record["critique"] = ""
+
+    with pytest.raises(ValueError, match="one critiqued Pass record"):
+        train_split_expert_examples(
+            records,
+            input_fields=["input"],
+            label_field="human_label",
+            critique_field="critique",
+        )
+
+
+def test_leakage_check_reports_every_held_out_record_in_the_definition():
+    records = labeled_split_records()
+    evaluator = train_seeded_evaluator(records)
+    leaked = dict(records[1])
+    leaked["input"] = f"   {leaked['input'].upper()}\n "
+
+    report = detect_evaluator_leakage(evaluator, {"dev": [records[8]], "test": [leaked]})
+
+    assert report["clean"] is False
+    assert report["leaked_records"] == 1
+    assert {match["split"] for match in report["matches"]} == {"test"}
+    assert {match["field"] for match in report["matches"]} == {"input", "output"}
+    assert report["matches"][0]["location"] == "expert_examples[1].input"
+    assert report["matches"][0]["record_id"] == "1"
+    assert "test[0].input in expert_examples[1].input" in describe_leakage(report)
+
+
+def test_leakage_check_passes_when_examples_come_from_train_only():
+    records = labeled_split_records()
+    report = detect_evaluator_leakage(
+        train_seeded_evaluator(records), {"dev": records[8:10], "test": records[10:]}
+    )
+
+    assert report["clean"] is True
+    assert report["matches"] == []
+    assert report["checked_splits"] == {"dev": 2, "test": 2}
+    assert report["records_with_field"] == {"input": 4, "output": 4}
+    assert report["compared_texts"] == {"input": 4, "output": 4}
+
+
+def test_leakage_check_matches_multiline_record_text():
+    records = labeled_split_records()
+    records[1]["input"] = "Customer asks about the refund policy\nfor order 001"
+    evaluator = train_seeded_evaluator(records)
+
+    report = detect_evaluator_leakage(evaluator, {"test": [records[1]]})
+
+    assert report["clean"] is False
+    assert report["matches"][0]["field"] == "input"
+    assert report["matches"][0]["location"] == "expert_examples[1].input"
+
+
+def test_leakage_check_matches_quoted_and_backslashed_record_text():
+    records = labeled_split_records()
+    records[1]["input"] = 'Customer asks "where is my refund" for path C:\\orders\\001'
+    evaluator = train_seeded_evaluator(records)
+
+    report = detect_evaluator_leakage(evaluator, {"test": [records[1]]})
+
+    assert report["clean"] is False
+    assert report["matches"][0]["field"] == "input"
+    assert report["matches"][0]["location"] == "expert_examples[1].input"
+
+
+def test_leakage_check_matches_quoted_record_text_inside_the_prompt():
+    records = labeled_split_records()
+    evaluator = train_seeded_evaluator(records)
+    quoted = 'The agent replied "we refund any order" without evidence'
+    evaluator["prompt"] = evaluator["prompt"].replace(
+        "## Trace or output to evaluate",
+        f"## Pasted trace\n{json.dumps({'output': quoted}, ensure_ascii=False)}\n\n"
+        "## Trace or output to evaluate",
+    )
+
+    report = detect_evaluator_leakage(evaluator, {"test": [{"id": 99, "output": quoted}]})
+
+    assert report["clean"] is False
+    assert report["matches"][0]["location"] == "prompt"
+
+
+def test_leakage_check_is_not_clean_when_no_compared_field_exists():
+    records = labeled_split_records()
+
+    report = detect_evaluator_leakage(
+        train_seeded_evaluator(records),
+        {"test": [{"prompt": "Customer asks about the refund policy for order 011"}]},
+    )
+
+    assert report["records_with_field"] == {"input": 0, "output": 0}
+    assert report["fields_without_records"] == ["input", "output"]
+    assert report["matches"] == []
+    assert report["clean"] is False
+    assert "compared no held-out records" in describe_leakage(report)
+
+
+def test_leakage_check_skips_incidental_short_texts():
+    records = labeled_split_records()
+
+    report = detect_evaluator_leakage(
+        train_seeded_evaluator(records),
+        {"test": [{"input": records[10]["input"], "output": "Fail"}]},
+        minimum_characters=8,
+    )
+
+    assert report["clean"] is True
+    assert report["skipped_short_texts"] == 1
+    assert report["compared_texts"] == {"input": 1, "output": 0}
+
+
+def test_leakage_check_is_not_clean_when_every_text_is_too_short():
+    records = labeled_split_records()
+
+    report = detect_evaluator_leakage(
+        train_seeded_evaluator(records),
+        {"test": [{"input": "Pass", "output": "Fail"}, {"input": None, "output": ""}]},
+        minimum_characters=8,
+    )
+
+    assert report["records_with_field"] == {"input": 2, "output": 2}
+    assert report["compared_texts"] == {"input": 0, "output": 0}
+    assert report["fields_without_records"] == []
+    assert report["matches"] == []
+    assert report["clean"] is False
+    assert "compared no held-out text for input, output" in describe_leakage(report)
+    assert "shorter than 8 characters" in describe_leakage(report)
 
 
 def test_rule_promotion_requires_a_pattern():
