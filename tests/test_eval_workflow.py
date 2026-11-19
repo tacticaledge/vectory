@@ -268,6 +268,49 @@ def test_train_split_examples_skip_records_without_a_critique():
         )
 
 
+def test_train_split_examples_reject_records_without_input_content():
+    records = labeled_split_records()
+    records[1]["input"] = "   "
+    records[1]["output"] = None
+
+    with pytest.raises(ValueError, match="record 1 carries no content"):
+        train_split_expert_examples(
+            records,
+            input_fields=["input", "output"],
+            label_field="human_label",
+            critique_field="critique",
+        )
+    with pytest.raises(ValueError, match="no content"):
+        train_split_expert_examples(
+            labeled_split_records(),
+            input_fields=["question"],
+            label_field="human_label",
+            critique_field="critique",
+        )
+    with pytest.raises(ValueError, match="one input field is required"):
+        train_split_expert_examples(
+            labeled_split_records(),
+            input_fields=[],
+            label_field="human_label",
+            critique_field="critique",
+        )
+
+
+def test_train_split_examples_keep_records_missing_an_optional_field():
+    records = labeled_split_records()
+    for record in records:
+        record.pop("output")
+
+    examples = train_split_expert_examples(
+        records,
+        input_fields=["input", "output"],
+        label_field="human_label",
+        critique_field="critique",
+    )
+
+    assert all(set(example["input"]) == {"input"} for example in examples)
+
+
 def test_train_split_examples_require_both_verdicts():
     records = labeled_split_records()
     for record in records:

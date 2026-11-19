@@ -267,6 +267,119 @@ def test_promote_rejects_a_single_verdict_train_split(tmp_path):
     assert not (workspace / "evaluators" / "failure-unsupported-claim.json").exists()
 
 
+def test_promote_rejects_a_train_split_without_the_requested_input_fields(tmp_path):
+    split_dir, _, workspace = _text_split_fixture(tmp_path)
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "promote",
+                str(workspace),
+                "Unsupported claim",
+                "--errors-reviewed",
+                "--train-split",
+                str(split_dir / "train.jsonl"),
+                "--input-fields",
+                "question",
+                "context",
+            ]
+        )
+
+    assert not (workspace / "evaluators" / "failure-unsupported-claim.json").exists()
+
+
+def test_check_leakage_rejects_a_held_out_split_that_lost_records(tmp_path):
+    split_dir, test_records, workspace = _text_split_fixture(tmp_path)
+    evaluator_path = workspace / "evaluators" / "leaky.json"
+    evaluator_path.write_text(
+        json.dumps(
+            build_evaluator_definition(
+                "Unsupported claim",
+                {"description": "The answer asserts facts absent from the supplied evidence."},
+                input_fields=["input", "output"],
+                source_annotation_ids=["0", "1"],
+                expert_examples=[
+                    {
+                        "input": {"input": test_records[0]["input"]},
+                        "critique": "The answer invents a refund window.",
+                        "result": "Fail",
+                    },
+                    {
+                        "input": {"input": "Where can I see my past orders?"},
+                        "critique": "The answer stays inside the supplied evidence.",
+                        "result": "Pass",
+                    },
+                ],
+                errors_reviewed=True,
+            )
+        ),
+        encoding="utf-8",
+    )
+    # Dropping the leaked record would otherwise hide the leak behind a clean report.
+    write_jsonl(split_dir / "test.jsonl", test_records[1:])
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "check-leakage",
+                str(evaluator_path),
+                "--split-manifest",
+                str(split_dir / "split_manifest.json"),
+                "--splits",
+                "test",
+            ]
+        )
+
+
+def test_check_leakage_rejects_an_edited_held_out_record(tmp_path):
+    split_dir, _, workspace = _text_split_fixture(tmp_path)
+    assert main(
+        [
+            "promote",
+            str(workspace),
+            "Unsupported claim",
+            "--errors-reviewed",
+            "--train-split",
+            str(split_dir / "train.jsonl"),
+            "--input-fields",
+            "input",
+            "output",
+        ]
+    ) == 0
+    evaluator_path = workspace / "evaluators" / "failure-unsupported-claim.json"
+    dev_path = split_dir / "dev.jsonl"
+    dev_records = [json.loads(line) for line in dev_path.read_text().splitlines()]
+    # The judge prediction column stays mutable, so filling it keeps the split checkable.
+    for record in dev_records:
+        record["judge_label"] = record["human_label"]
+    write_jsonl(dev_path, dev_records)
+    assert main(
+        [
+            "check-leakage",
+            str(evaluator_path),
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
+            "--splits",
+            "dev",
+        ]
+    ) == 0
+
+    dev_records[0]["input"] = "Replaced held-out question about the refund policy"
+    write_jsonl(dev_path, dev_records)
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "check-leakage",
+                str(evaluator_path),
+                "--split-manifest",
+                str(split_dir / "split_manifest.json"),
+                "--splits",
+                "dev",
+            ]
+        )
+
+
 def test_check_leakage_reports_held_out_records_in_an_evaluator(tmp_path, capsys):
     split_dir, test_records, workspace = _text_split_fixture(tmp_path)
     evaluator_path = workspace / "evaluators" / "leaky.json"

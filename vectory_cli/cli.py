@@ -180,6 +180,51 @@ def _records_sha256(records: list[dict], fields: list[str] | None = None) -> str
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _verify_split_artifact(
+    name: str,
+    artifact: object,
+    records: list[dict],
+    judge_label_column: str,
+) -> list[str]:
+    """Check a loaded split file against the counts and hashes recorded in the manifest.
+
+    Split files stay editable after they are written, so an altered or truncated
+    partition would otherwise be read as if it were the original held-out data.
+    Returns the immutable fields whose contents matched the manifest.
+    """
+    if not isinstance(artifact, dict):
+        raise TypeError(f"Split manifest does not contain {name} artifact provenance")
+    fields = artifact.get("provenance_fields")
+    field_hashes = artifact.get("field_sha256")
+    expected_count = artifact.get("record_count")
+    mutable_fields = artifact.get("mutable_fields")
+    if mutable_fields != [judge_label_column]:
+        raise ValueError("Split manifest must designate exactly one mutable judge prediction field")
+    if (
+        not isinstance(fields, list)
+        or not all(isinstance(field, str) for field in fields)
+        or not isinstance(field_hashes, dict)
+        or not all(
+            isinstance(field, str) and isinstance(digest, str)
+            for field, digest in field_hashes.items()
+        )
+        or not isinstance(expected_count, int)
+    ):
+        raise ValueError(f"Split manifest {name} provenance is incomplete")
+    verified_fields = [field for field in fields if field not in mutable_fields]
+    if not verified_fields:
+        raise ValueError(f"Split manifest {name} provenance pins no immutable field")
+    fields_match = all(
+        field_hashes.get(field) == _records_sha256(records, [field])
+        for field in verified_fields
+    )
+    if len(records) != expected_count or not fields_match:
+        raise ValueError(
+            f"Dataset does not match the untouched {name} partition in the split manifest"
+        )
+    return verified_fields
+
+
 def _verify_test_split_provenance(
     dataset: Path,
     records: list[dict],
@@ -199,41 +244,16 @@ def _verify_test_split_provenance(
             "Judge label column does not match the prediction field designated by the split manifest"
         )
     test_artifact = (manifest.get("artifacts") or {}).get("test")
-    if not isinstance(test_artifact, dict):
-        raise TypeError("Split manifest does not contain test artifact provenance")
-    fields = test_artifact.get("provenance_fields")
-    field_hashes = test_artifact.get("field_sha256")
-    expected_count = test_artifact.get("record_count")
-    if (
-        not isinstance(fields, list)
-        or not all(isinstance(field, str) for field in fields)
-        or not isinstance(field_hashes, dict)
-        or not all(
-            isinstance(field, str) and isinstance(digest, str)
-            for field, digest in field_hashes.items()
-        )
-        or not isinstance(expected_count, int)
-    ):
-        raise ValueError("Split manifest test provenance is incomplete")
-    mutable_fields = test_artifact.get("mutable_fields")
-    if mutable_fields != [judge_label_column]:
-        raise ValueError("Split manifest must designate exactly one mutable judge prediction field")
-    verified_fields = [field for field in fields if field not in mutable_fields]
-    fields_match = all(
-        field_hashes.get(field) == _records_sha256(records, [field])
-        for field in verified_fields
+    verified_fields = _verify_split_artifact(
+        "test", test_artifact, records, judge_label_column
     )
-    if len(records) != expected_count or not fields_match:
-        raise ValueError(
-            "Validation dataset does not match the untouched test partition in the split manifest"
-        )
     return {
         "verified": True,
         "split_manifest": str(manifest_path),
         "test_artifact": str(dataset),
         "verified_fields": verified_fields,
         "excluded_prediction_field": judge_label_column,
-        "record_count": expected_count,
+        "record_count": len(records),
     }
 
 
@@ -367,9 +387,18 @@ def _write_promoted_evaluator(
 
 
 def _held_out_split_records(manifest_path: Path, names: list[str]) -> dict[str, list[dict]]:
+    """Load the held-out splits named in a manifest after checking their provenance.
+
+    A leakage report only means something when it was compared against the partition
+    the manifest recorded, so every loaded split must still match its recorded record
+    count and immutable field hashes.
+    """
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != "1.0":
         raise ValueError("Split manifest must use schema_version 1.0")
+    judge_label_column = manifest.get("judge_label_column")
+    if not isinstance(judge_label_column, str) or not judge_label_column:
+        raise ValueError("Split manifest does not name the mutable judge prediction field")
     artifacts = manifest.get("artifacts") or {}
     splits = {}
     for name in names:
@@ -381,7 +410,9 @@ def _held_out_split_records(manifest_path: Path, names: list[str]) -> dict[str, 
         artifact = artifacts.get(name)
         if not isinstance(artifact, dict) or not artifact.get("path"):
             raise ValueError(f"Split manifest does not describe a {name} artifact")
-        splits[name] = _load_records(manifest_path.parent / str(artifact["path"]))
+        records = _load_records(manifest_path.parent / str(artifact["path"]))
+        _verify_split_artifact(name, artifact, records, judge_label_column)
+        splits[name] = records
     return splits
 
 
@@ -398,6 +429,7 @@ def run_check_leakage(args: argparse.Namespace) -> int:
     if args.out:
         _write_json(args.out, typed_report.model_dump(mode="json", by_alias=True))
         print(f"Wrote leakage report: {args.out}")
+    print(f"Verified split provenance against: {args.split_manifest}")
     checked = ", ".join(f"{name}={count}" for name, count in sorted(report["checked_splits"].items()))
     print(f"Checked records: {checked}")
     print(f"Compared fields: {', '.join(report['text_fields'])}")

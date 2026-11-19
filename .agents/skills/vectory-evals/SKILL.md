@@ -27,13 +27,13 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
    `vectory promote WORKSPACE "FAILURE MODE" --errors-reviewed --train-split SPLITS/train.jsonl`
 
-   Drawing examples from the train split keeps dev and test records out of the definition. Every train record needs the Pass/Fail label, only records carrying an expert critique become examples, and those critiqued records must cover both verdicts. Without `--train-split`, examples come from the first workspace annotations, which may later land in dev or test. Prefer one binary evaluator per failure mode. Treat every promoted evaluator as `draft_unvalidated`.
+   Drawing examples from the train split keeps dev and test records out of the definition. Every train record needs the Pass/Fail label, only records carrying an expert critique become examples, those critiqued records must cover both verdicts, and each must carry content in at least one requested input field. Without `--train-split`, examples come from the first workspace annotations, which may later land in dev or test. Prefer one binary evaluator per failure mode. Treat every promoted evaluator as `draft_unvalidated`.
 
 5. Before validating, confirm no held-out record reached the definition:
 
    `vectory check-leakage EVALUATOR_JSON --split-manifest SPLITS/split_manifest.json`
 
-   A nonzero exit status lists every dev or test record whose normalized text appears in the prompt, examples, definitions, or rule. Remove or replace those examples; never move the leaked records into another split. The check also fails when no held-out text was compared at all, because it then proved nothing; name the real columns with `--text-fields` instead of verdict-only columns.
+   Vectory verifies each held-out file against the manifest fingerprints before comparing, so an altered or truncated split fails instead of reading as clean. A nonzero exit status lists every dev or test record whose normalized text appears in the prompt, examples, definitions, or rule. Remove or replace those examples; never move the leaked records into another split. The check also fails when no held-out text was compared at all, because it then proved nothing; name the real columns with `--text-fields` instead of verdict-only columns.
 
 6. Once evaluator predictions have been added to the held-out test records, run:
 

@@ -64,7 +64,7 @@ vectory validate-judge judge-splits/test.jsonl \
   --evaluator eval-review/evaluators/failure-unsupported-claim.json
 ```
 
-Judge examples come from the train split only, so dev and test records stay unseen. `vectory check-leakage` lists every dev or test record whose text appears in an evaluator definition after lowercasing and collapsing whitespace, matching verbatim and JSON-escaped text alike, and `vectory validate-judge` refuses an evaluator whose definition overlaps the test split. Both fail when no held-out text reached the comparison, whether the compared fields are missing or every value is too short, so a check that compared nothing never reads as clean.
+Judge examples come from the train split only, so dev and test records stay unseen. `vectory check-leakage` verifies each held-out file against the fingerprints in the split manifest, then lists every dev or test record whose text appears in an evaluator definition after lowercasing and collapsing whitespace, matching verbatim and JSON-escaped text alike, and `vectory validate-judge` refuses an evaluator whose definition overlaps the test split. Both fail when no held-out text reached the comparison, whether the compared fields are missing or every value is too short, so a check that compared nothing never reads as clean.
 
 Estimate the true pass rate of judged outputs, corrected for judge error, with a 95% interval:
 
