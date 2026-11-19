@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 from statistics import mean
 
-import pandas as pd
 import pytest
 
 from components.vectory_benchmark.leaderboard import build_leaderboard
@@ -320,13 +319,13 @@ def test_mixed_agent_reliability_uses_one_shared_k():
     assert rows["SingleRunAgent"]["k"] is None
     assert entries["DeepAgent"]["reliability_k"] == 2
     assert entries["FastAgent"]["reliability_k"] == 2
-    assert pd.isna(entries["SingleRunAgent"]["reliability_k"])
+    assert entries["SingleRunAgent"]["reliability_k"] is None
     # pass^2 is C(3,2)/C(4,2) for the 3-of-4 agent and C(1,2)/C(2,2) for the 1-of-2 agent.
     assert rows["DeepAgent"]["pass_hat_k"] == pytest.approx(0.5)
     assert rows["FastAgent"]["pass_hat_k"] == pytest.approx(0.0)
     assert entries["DeepAgent"]["pass_hat_k"] == pytest.approx(0.5)
     assert entries["FastAgent"]["pass_hat_k"] == pytest.approx(0.0)
-    assert pd.isna(entries["SingleRunAgent"]["pass_hat_k"])
+    assert entries["SingleRunAgent"]["pass_hat_k"] is None
     assert summary["reliability_tasks"] == 2
     assert summary["pass_hat_k"] == pytest.approx(mean([0.5, 0.0]), abs=1e-4)
 
@@ -587,6 +586,36 @@ def test_report_bundle_includes_task_reliability(tmp_path):
     assert "pass_hat_k" in (tmp_path / "task_reliability.csv").read_text()
     assert "Task Reliability" in report
     assert "Pass^3" in report
+
+
+def test_mixed_submission_leaderboard_json_is_strict(tmp_path):
+    suite = load_suite()
+    scores = _repeated_scores([True, False], agent="RepeatAgent")
+    scores += _repeated_scores([True], agent="SingleRunAgent")
+    leaderboard_rows = build_leaderboard(scores).to_dict(orient="records")
+
+    # allow_nan=False stands in for a strict consumer: it refuses to emit NaN.
+    assert "NaN" not in json.dumps(leaderboard_rows, allow_nan=False)
+
+    write_report_bundle(
+        tmp_path,
+        suite=suite,
+        tasks=suite.tasks,
+        runs=[],
+        scores=scores,
+        leaderboard_rows=leaderboard_rows,
+    )
+
+    written = (tmp_path / "leaderboard.json").read_text()
+    entries = {row["agent"]: row for row in json.loads(written)}
+
+    assert "NaN" not in written
+    assert entries["RepeatAgent"]["reliability_k"] == 2
+    assert entries["SingleRunAgent"]["reliability_k"] is None
+    assert entries["SingleRunAgent"]["pass_at_k"] is None
+    assert entries["SingleRunAgent"]["pass_hat_k"] is None
+    assert entries["SingleRunAgent"]["reliability_tasks"] is None
+    assert entries["SingleRunAgent"]["pass_at_1"] == pytest.approx(1.0)
 
 
 def test_report_bundle_neutralizes_csv_formula_cells(tmp_path):

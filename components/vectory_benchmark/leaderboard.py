@@ -11,6 +11,27 @@ from components.vectory_benchmark.reliability import reliability_summary, submis
 from components.vectory_benchmark.schemas import LeaderboardEntry, RunScore
 
 
+_NULLABLE_COLUMNS = ("reliability_k", "pass_at_k", "pass_hat_k", "reliability_tasks")
+
+
+def _keep_missing_as_none(frame: pd.DataFrame) -> pd.DataFrame:
+    """Store missing reliability values as ``None`` rather than float ``NaN``.
+
+    pandas coerces a column that mixes numbers with ``None`` into floats, and the
+    resulting ``NaN`` serializes as the non-standard ``NaN`` literal, which makes
+    ``leaderboard.json`` unparseable for strict JSON consumers.
+    """
+    for column in _NULLABLE_COLUMNS:
+        if column not in frame.columns or not frame[column].isna().any():
+            continue
+        frame[column] = pd.Series(
+            [None if pd.isna(value) else value for value in frame[column]],
+            index=frame.index,
+            dtype=object,
+        )
+    return frame
+
+
 def _robust_pass_at_5(scores: list[RunScore]) -> float:
     by_task: dict[str, list[RunScore]] = defaultdict(list)
     for score in scores:
@@ -83,4 +104,4 @@ def build_leaderboard(scores: list[RunScore]) -> pd.DataFrame:
     for index, entry in enumerate(entries, start=1):
         entry.rank = index
 
-    return pd.DataFrame([entry.model_dump() for entry in entries])
+    return _keep_missing_as_none(pd.DataFrame([entry.model_dump() for entry in entries]))
