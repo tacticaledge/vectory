@@ -34,6 +34,18 @@ def normalize_leakage_text(value: Any) -> str:
     return _WHITESPACE.sub(" ", text).strip().casefold()
 
 
+def _search_variants(text: str) -> tuple[str, ...]:
+    """List the normalized forms a reused record text can take inside a definition.
+
+    Expert example inputs are stored as mappings and rendered into the judge prompt as
+    JSON, so a record's quotes and backslashes appear escaped there while the record
+    itself carries them verbatim. Searching the escaped form too keeps that escaping
+    from hiding a reused record.
+    """
+    escaped = json.dumps(text, ensure_ascii=False)[1:-1]
+    return (text,) if escaped == text else (text, escaped)
+
+
 def _definition_sections(evaluator: EvaluatorDefinition) -> list[tuple[str, str]]:
     """List the searchable definition text, most specific location first."""
     sections: list[tuple[str, str]] = []
@@ -65,6 +77,8 @@ def detect_evaluator_leakage(
 
     Record text is compared against the prompt, expert examples, failure-mode quotes,
     decision definitions, and rule pattern after lowercasing and collapsing whitespace.
+    Each record text is searched both verbatim and in its JSON-escaped form, so quotes
+    and backslashes cannot hide inside a serialized example or prompt.
     Texts shorter than ``minimum_characters`` are skipped, because incidental short
     phrases match instruction wording without indicating leakage. Only the first
     matching location per record field is reported, so one reused record stays one
@@ -95,8 +109,14 @@ def detect_evaluator_leakage(
                     skipped_short += 1
                     continue
                 compared_texts[field] += 1
+                variants = _search_variants(text)
                 location = next(
-                    (location for location, section in sections if text in section), None
+                    (
+                        location
+                        for location, section in sections
+                        if any(variant in section for variant in variants)
+                    ),
+                    None,
                 )
                 if location is None:
                     continue

@@ -240,6 +240,33 @@ def test_promote_draws_examples_from_the_train_split(tmp_path):
     ) == 0
 
 
+def test_promote_rejects_a_single_verdict_train_split(tmp_path):
+    split_dir, _, workspace = _text_split_fixture(tmp_path)
+    train_path = split_dir / "train.jsonl"
+    train_records = [json.loads(line) for line in train_path.read_text().splitlines()]
+    for record in train_records:
+        if record["human_label"] == "Pass":
+            record["critique"] = ""
+    write_jsonl(train_path, train_records)
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "promote",
+                str(workspace),
+                "Unsupported claim",
+                "--errors-reviewed",
+                "--train-split",
+                str(train_path),
+                "--input-fields",
+                "input",
+                "output",
+            ]
+        )
+
+    assert not (workspace / "evaluators" / "failure-unsupported-claim.json").exists()
+
+
 def test_check_leakage_reports_held_out_records_in_an_evaluator(tmp_path, capsys):
     split_dir, test_records, workspace = _text_split_fixture(tmp_path)
     evaluator_path = workspace / "evaluators" / "leaky.json"

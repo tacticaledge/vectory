@@ -85,7 +85,7 @@ vectory promote eval-review "Unsupported claim" \
   --train-critique-column critique
 ```
 
-Every train record must carry the binary Pass/Fail label. Records without an expert critique are skipped, because an example without the reasoning behind its verdict cannot teach the judge, and promotion fails when no train record has one. Vectory takes up to four Fail and four Pass records and records their provenance as `train:ID` source annotation IDs.
+Every train record must carry the binary Pass/Fail label. Records without an expert critique are skipped, because an example without the reasoning behind its verdict cannot teach the judge, and promotion fails when no train record has one. The critiqued train records must cover both verdicts: promotion fails when they are all Pass or all Fail, since a judge taught one verdict cannot clear both the true-pass and true-fail thresholds. Vectory takes up to four Fail and four Pass records and records their provenance as `train:ID` source annotation IDs.
 
 Regex and substring rules are available when code is simpler and more reliable:
 
@@ -120,7 +120,7 @@ vectory check-leakage eval-review/evaluators/failure-unsupported-claim.json \
   --out judge-leakage.json
 ```
 
-Vectory lowercases each definition section and each record field, collapses whitespace, including the newlines and tabs that serialization escapes, and reports every dev or test record whose text appears in an expert example input, an expert critique, a failure-mode quote, a Pass/Fail definition, a rule pattern, or the prompt. The report names the split, record index, record `id`, field, and definition location, and the command exits nonzero when anything leaked.
+Vectory lowercases each definition section and each record field, collapses whitespace, including the newlines and tabs that serialization escapes, and reports every dev or test record whose text appears in an expert example input, an expert critique, a failure-mode quote, a Pass/Fail definition, a rule pattern, or the prompt. Each record text is searched both verbatim and in its JSON-escaped form, so a record containing quotes or backslashes is still found inside a serialized example or a pasted prompt fragment. The report names the split, record index, record `id`, field, and definition location, and the command exits nonzero when anything leaked.
 
 Only held-out splits can be checked: `--splits` accepts `dev` and `test` and defaults to both. Train examples belong in the definition, so a clean train result would prove nothing about the records the judge is measured on.
 

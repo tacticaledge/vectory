@@ -268,6 +268,21 @@ def test_train_split_examples_skip_records_without_a_critique():
         )
 
 
+def test_train_split_examples_require_both_verdicts():
+    records = labeled_split_records()
+    for record in records:
+        if record["human_label"] == "Pass":
+            record["critique"] = ""
+
+    with pytest.raises(ValueError, match="one critiqued Pass record"):
+        train_split_expert_examples(
+            records,
+            input_fields=["input"],
+            label_field="human_label",
+            critique_field="critique",
+        )
+
+
 def test_leakage_check_reports_every_held_out_record_in_the_definition():
     records = labeled_split_records()
     evaluator = train_seeded_evaluator(records)
@@ -308,6 +323,34 @@ def test_leakage_check_matches_multiline_record_text():
     assert report["clean"] is False
     assert report["matches"][0]["field"] == "input"
     assert report["matches"][0]["location"] == "expert_examples[1].input"
+
+
+def test_leakage_check_matches_quoted_and_backslashed_record_text():
+    records = labeled_split_records()
+    records[1]["input"] = 'Customer asks "where is my refund" for path C:\\orders\\001'
+    evaluator = train_seeded_evaluator(records)
+
+    report = detect_evaluator_leakage(evaluator, {"test": [records[1]]})
+
+    assert report["clean"] is False
+    assert report["matches"][0]["field"] == "input"
+    assert report["matches"][0]["location"] == "expert_examples[1].input"
+
+
+def test_leakage_check_matches_quoted_record_text_inside_the_prompt():
+    records = labeled_split_records()
+    evaluator = train_seeded_evaluator(records)
+    quoted = 'The agent replied "we refund any order" without evidence'
+    evaluator["prompt"] = evaluator["prompt"].replace(
+        "## Trace or output to evaluate",
+        f"## Pasted trace\n{json.dumps({'output': quoted}, ensure_ascii=False)}\n\n"
+        "## Trace or output to evaluate",
+    )
+
+    report = detect_evaluator_leakage(evaluator, {"test": [{"id": 99, "output": quoted}]})
+
+    assert report["clean"] is False
+    assert report["matches"][0]["location"] == "prompt"
 
 
 def test_leakage_check_is_not_clean_when_no_compared_field_exists():

@@ -42,7 +42,8 @@ def train_split_expert_examples(
     Drawing examples from the train partition keeps dev and test records out of the
     evaluator definition, so later validation measures the judge on text it never saw.
     Records without an expert critique are skipped, because an example without the
-    reasoning behind its verdict cannot teach the judge.
+    reasoning behind its verdict cannot teach the judge. The critiqued records must
+    cover both verdicts, so a promoted evaluator always carries Pass and Fail examples.
     """
     if limit_per_class < 1:
         raise ValueError("At least one example per class is required")
@@ -68,6 +69,11 @@ def train_split_expert_examples(
     if not examples:
         raise ValueError(
             f"No train split record carries a non-empty {critique_field!r} critique"
+        )
+    if {example["result"] for example in examples} != {"Pass", "Fail"}:
+        raise ValueError(
+            "Train split needs at least one critiqued Pass record and one critiqued "
+            "Fail record, because a judge taught only one verdict cannot be validated"
         )
     return examples
 
