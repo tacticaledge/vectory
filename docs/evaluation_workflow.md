@@ -9,8 +9,8 @@ Vectory connects failure discovery, domain-expert review, evaluator development,
 3. Create a diverse discovery sample and review it with binary Pass/Fail verdicts plus detailed critiques.
 4. Group failed examples into a human-accepted failure taxonomy and find related traces for confirmation.
 5. Fix obvious or pervasive product errors and repeat review before automating the judgment.
-6. Promote a remaining failure mode into a focused binary evaluator seeded with expert Pass and Fail critiques.
-7. Iterate with train and development labels, then validate once on a held-out test set.
+6. Promote a remaining failure mode into a focused binary evaluator seeded with expert Pass and Fail critiques from the train split only.
+7. Iterate with train and development labels, check for held-out leakage, then validate once on a held-out test set.
 8. Gate only when both true-pass and true-fail rates clear the agreed thresholds. Repeat after material changes.
 
 The default discovery sample is 30 records. It combines product-dimension coverage, cluster representatives, and random exploration. This is a coverage-biased sample and must not be used to estimate production prevalence.
@@ -75,6 +75,18 @@ The generated evaluator:
 - records its source annotation IDs and lifecycle checkpoints; and
 - starts as `draft_unvalidated`.
 
+By default the examples come from the first annotations in the workspace, which may later land in the dev or test split. Once labels are split, draw the examples from the train partition instead:
+
+```bash
+vectory promote eval-review "Unsupported claim" \
+  --errors-reviewed \
+  --train-split judge-splits/train.jsonl \
+  --train-label-column human_label \
+  --train-critique-column critique
+```
+
+Every train record must carry the binary Pass/Fail label. Records without an expert critique are skipped, because an example without the reasoning behind its verdict cannot teach the judge, and promotion fails when no train record has one. Vectory takes up to four Fail and four Pass records and records their provenance as `train:ID` source annotation IDs.
+
 Regex and substring rules are available when code is simpler and more reliable:
 
 ```bash
@@ -97,6 +109,21 @@ vectory split-labels judge-labels.jsonl \
 
 Use `train.jsonl` for examples and prompt construction, `dev.jsonl` for iteration, and `test.jsonl` for final validation. Do not move test failures back into prompt development without creating a new untouched test set.
 
+## Check an evaluator for held-out leakage
+
+Duplicated source records, hand-edited prompts, and examples copied from a review screen can all put a held-out record inside an evaluator definition. That inflates the measured accuracy of the judge, the same [data leakage](https://scikit-learn.org/stable/common_pitfalls.html#data-leakage) pitfall that inflates model scores:
+
+```bash
+vectory check-leakage eval-review/evaluators/failure-unsupported-claim.json \
+  --split-manifest judge-splits/split_manifest.json \
+  --splits dev test \
+  --out judge-leakage.json
+```
+
+Vectory lowercases each definition section and each record field, collapses whitespace, and reports every dev or test record whose text appears in an expert example input, an expert critique, a failure-mode quote, a Pass/Fail definition, a rule pattern, or the prompt. The report names the split, record index, record `id`, field, and definition location, and the command exits nonzero when anything leaked.
+
+By default Vectory compares the evaluator's own `input_fields`; use `--text-fields` when the split uses other column names. Texts shorter than `--min-characters` (default 8) are skipped, because short phrases such as a bare verdict match instruction wording without indicating leakage. The report counts those skipped texts and how many of the compared fields were present, so a check that covered nothing is visible rather than silently clean.
+
 ## Validate and gate a judge
 
 After adding evaluator predictions to the held-out test records:
@@ -113,7 +140,9 @@ vectory validate-judge judge-splits/test.jsonl \
   --evaluator eval-review/evaluators/failure-unsupported-claim.json
 ```
 
-The split manifest fingerprints every original test field independently and designates the judge prediction column at split time. You may add or replace that one declared output column after splitting; Vectory verifies that labels, inputs, metadata, ordering, and record count still match the untouched test partition, and rejects a validator that names a different mutable field. The report includes this provenance, the confusion matrix, balanced accuracy, per-class precision/recall/F1, bootstrap intervals, product-dimension slices, thresholds, and gate result. When an evaluator artifact declares stricter thresholds than the CLI baseline, Vectory enforces the stricter values and records both threshold sources in the report. Updating an evaluator requires verified split provenance and appends the report to its validation history. The command exits nonzero when provenance fails, the gate fails, either class is absent, or the evaluator's fix-review checkpoint is incomplete.
+When `--evaluator` is supplied, Vectory runs the same leakage check against the test records and embeds the result in the report. An evaluator whose definition contains test text is refused: the gate fails with a blocker naming the leaked records, because its measured accuracy would include records it was built from. Use `--text-fields` and `--min-leakage-characters` to control that check.
+
+The split manifest fingerprints every original test field independently and designates the judge prediction column at split time. You may add or replace that one declared output column after splitting; Vectory verifies that labels, inputs, metadata, ordering, and record count still match the untouched test partition, and rejects a validator that names a different mutable field. The report includes this provenance, the confusion matrix, balanced accuracy, per-class precision/recall/F1, bootstrap intervals, product-dimension slices, thresholds, and gate result. When an evaluator artifact declares stricter thresholds than the CLI baseline, Vectory enforces the stricter values and records both threshold sources in the report. Updating an evaluator requires verified split provenance and appends the report to its validation history. The command exits nonzero when provenance fails, the gate fails, either class is absent, the evaluator's definition overlaps the test split, or the evaluator's fix-review checkpoint is incomplete.
 
 Raw agreement alone can be misleading on imbalanced data. Inspect false passes in particular: these are human failures that the automated judge allowed through.
 

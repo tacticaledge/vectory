@@ -6,10 +6,22 @@ from .discovery import (
     select_diverse_samples,
     summarize_coverage,
 )
-from .promotion import build_evaluator_definition, validate_evaluator_definition
+from .leakage import (
+    DEFAULT_MINIMUM_CHARACTERS,
+    HELD_OUT_SPLITS,
+    describe_leakage,
+    detect_evaluator_leakage,
+    normalize_leakage_text,
+)
+from .promotion import (
+    build_evaluator_definition,
+    train_split_expert_examples,
+    validate_evaluator_definition,
+)
 from .schemas import (
     EvaluatorDefinition,
     JudgeValidationReport,
+    LeakageReport,
     SuccessRateReport,
     dump_evaluator_definition,
     parse_evaluator_definition,
@@ -35,8 +47,11 @@ from .workspace import (
 )
 
 __all__ = [
+    "DEFAULT_MINIMUM_CHARACTERS",
+    "HELD_OUT_SPLITS",
     "EvaluatorDefinition",
     "JudgeValidationReport",
+    "LeakageReport",
     "SuccessRateReport",
     "archive_review_workspace",
     "bootstrap_metric_intervals",
@@ -44,12 +59,15 @@ __all__ = [
     "build_review_bundle",
     "corrected_success_rate",
     "dataframe_to_records",
+    "describe_leakage",
+    "detect_evaluator_leakage",
     "dump_evaluator_definition",
     "estimate_success_rate",
     "find_related_records",
     "initialize_review_workspace",
     "load_review_workspace",
     "normalize_binary_label",
+    "normalize_leakage_text",
     "normalize_trace_segments",
     "parse_evaluator_definition",
     "save_evaluator_definition",
@@ -59,6 +77,7 @@ __all__ = [
     "select_diverse_samples",
     "split_labeled_records",
     "summarize_coverage",
+    "train_split_expert_examples",
     "validate_evaluator_definition",
     "validate_evaluator_labels",
 ]

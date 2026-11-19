@@ -17,33 +17,39 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
 2. Fix obvious product errors revealed by review. Repeat the review until pervasive errors stabilize.
 
-3. If the workspace has an accepted failure mode, create a focused evaluator:
-
-   `vectory promote WORKSPACE "FAILURE MODE" --errors-reviewed`
-
-   Prefer one binary evaluator per failure mode. Treat every promoted evaluator as `draft_unvalidated`.
-
-4. If trusted labels exist, create disjoint sets:
+3. If trusted labels exist, create disjoint sets before building judge examples:
 
    `vectory split-labels LABELS --label-column HUMAN_LABEL --judge-column JUDGE_LABEL --out SPLITS`
 
    Use train only for examples or prompt construction, dev for iteration, and test once for final validation.
 
-5. Once evaluator predictions have been added to the held-out test records, run:
+4. If the workspace has an accepted failure mode, create a focused evaluator:
+
+   `vectory promote WORKSPACE "FAILURE MODE" --errors-reviewed --train-split SPLITS/train.jsonl`
+
+   Drawing examples from the train split keeps dev and test records out of the definition. Every train record needs the Pass/Fail label, and only records carrying an expert critique become examples. Without `--train-split`, examples come from the first workspace annotations, which may later land in dev or test. Prefer one binary evaluator per failure mode. Treat every promoted evaluator as `draft_unvalidated`.
+
+5. Before validating, confirm no held-out record reached the definition:
+
+   `vectory check-leakage EVALUATOR_JSON --split-manifest SPLITS/split_manifest.json`
+
+   A nonzero exit status lists every dev or test record whose normalized text appears in the prompt, examples, definitions, or rule. Remove or replace those examples; never move the leaked records into another split.
+
+6. Once evaluator predictions have been added to the held-out test records, run:
 
    `vectory validate-judge SPLITS/test.jsonl --human-column HUMAN_LABEL --judge-column JUDGE_LABEL --split-manifest SPLITS/split_manifest.json --out REPORT`
 
-   A nonzero exit status means the evaluator must not gate releases. Use `--group-by` with product dimensions such as feature, scenario, and persona when those fields exist.
+   A nonzero exit status means the evaluator must not gate releases, including when `--evaluator` is supplied and its definition overlaps the test split. Use `--group-by` with product dimensions such as feature, scenario, and persona when those fields exist.
 
-6. To report how often a validated evaluator's target actually passes on a random sample of new outputs, run:
+7. To report how often a validated evaluator's target actually passes on a random sample of new outputs, run:
 
    `vectory estimate JUDGED --judge-column JUDGE_LABEL --test-set SPLITS/test.jsonl --human-column HUMAN_LABEL --split-manifest SPLITS/split_manifest.json --out ESTIMATE`
 
    Report the corrected rate with its 95% interval, not the raw judge pass rate. To gate on the interval's lower bound, add `--min-pass-rate` together with `--evaluator EVALUATOR_JSON`; only a validated evaluator can gate, and every judged row must name that evaluator in its `evaluator_id` field.
 
-7. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
+8. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
 
-8. When reliability under repetition matters, submit several runs per `task_id` to `vectory benchmark`. The leaderboard and report bundle then add unbiased `pass@k` and `pass^k`; quote `pass^k`, success on every one of `k` tries, for production readiness, and say which `k` and how many repeated tasks it covers.
+9. When reliability under repetition matters, submit several runs per `task_id` to `vectory benchmark`. The leaderboard and report bundle then add unbiased `pass@k` and `pass^k`; quote `pass^k`, success on every one of `k` tries, for production readiness, and say which `k` and how many repeated tasks it covers.
 
 ## Preserve these invariants
 
@@ -51,6 +57,7 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 - Inspect complete traces when available, including tool calls, results, and final outputs.
 - Keep raw evidence, expert critiques, accepted taxonomy, evaluator definitions, and validation reports inspectable.
 - Use expert critiques as judge examples; they must be specific enough for a new teammate to understand the verdict.
+- Draw judge examples from the train split only, and never from dev or test records.
 - Require both true-pass rate and true-fail rate. Inspect per-class precision and recall, not raw agreement alone.
 - Do not claim review, validation, or production readiness that did not happen.
 - Re-run expert alignment after material model, prompt, tool, or policy changes.

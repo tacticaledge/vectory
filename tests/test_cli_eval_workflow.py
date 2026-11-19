@@ -151,6 +151,262 @@ def test_split_and_validate_judge_gate(tmp_path):
     assert "judge_label" not in report_payload["provenance"]["verified_fields"]
 
 
+def _text_split_fixture(tmp_path):
+    labels = tmp_path / "labels.jsonl"
+    write_jsonl(
+        labels,
+        [
+            {
+                "id": index,
+                "input": f"Customer asks about the refund policy for order {index:03d}",
+                "output": f"Agent answer {index:03d} about the refund window",
+                "human_label": "Pass" if index % 2 == 0 else "Fail",
+                "judge_label": "",
+                "critique": f"Critique {index:03d}: the agent invents a policy detail.",
+            }
+            for index in range(40)
+        ],
+    )
+    split_dir = tmp_path / "splits"
+    assert main(
+        [
+            "split-labels",
+            str(labels),
+            "--label-column",
+            "human_label",
+            "--judge-column",
+            "judge_label",
+            "--out",
+            str(split_dir),
+        ]
+    ) == 0
+    test_path = split_dir / "test.jsonl"
+    test_records = [json.loads(line) for line in test_path.read_text().splitlines()]
+    for record in test_records:
+        record["judge_label"] = record["human_label"]
+    write_jsonl(test_path, test_records)
+    workspace = tmp_path / "review"
+    assert main(["discover", str(labels), "--workspace", str(workspace), "--sample-size", "6"]) == 0
+    (workspace / "taxonomy.json").write_text(
+        json.dumps(
+            {
+                "Unsupported claim": {
+                    "description": "The answer asserts facts absent from the supplied evidence."
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return split_dir, test_records, workspace
+
+
+def test_promote_draws_examples_from_the_train_split(tmp_path):
+    split_dir, _, workspace = _text_split_fixture(tmp_path)
+    train_records = [
+        json.loads(line) for line in (split_dir / "train.jsonl").read_text().splitlines()
+    ]
+
+    assert main(
+        [
+            "promote",
+            str(workspace),
+            "Unsupported claim",
+            "--errors-reviewed",
+            "--train-split",
+            str(split_dir / "train.jsonl"),
+            "--input-fields",
+            "input",
+            "output",
+        ]
+    ) == 0
+
+    evaluator = json.loads(
+        (workspace / "evaluators" / "failure-unsupported-claim.json").read_text(encoding="utf-8")
+    )
+    train_inputs = {record["input"] for record in train_records}
+    assert {example["input"]["input"] for example in evaluator["expert_examples"]} <= train_inputs
+    assert {example["result"] for example in evaluator["expert_examples"]} == {"Pass", "Fail"}
+    assert all(
+        source.startswith("train:")
+        for source in evaluator["failure_mode"]["source_annotation_ids"]
+    )
+    assert main(
+        [
+            "check-leakage",
+            str(workspace / "evaluators" / "failure-unsupported-claim.json"),
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
+        ]
+    ) == 0
+
+
+def test_check_leakage_reports_held_out_records_in_an_evaluator(tmp_path, capsys):
+    split_dir, test_records, workspace = _text_split_fixture(tmp_path)
+    evaluator_path = workspace / "evaluators" / "leaky.json"
+    evaluator_path.write_text(
+        json.dumps(
+            build_evaluator_definition(
+                "Unsupported claim",
+                {"description": "The answer asserts facts absent from the supplied evidence."},
+                input_fields=["input", "output"],
+                source_annotation_ids=["0", "1"],
+                expert_examples=[
+                    {
+                        "input": {"input": f"   {test_records[0]['input'].upper()}  "},
+                        "critique": "The answer invents a refund window.",
+                        "result": "Fail",
+                    },
+                    {
+                        "input": {"input": "Where can I see my past orders?"},
+                        "critique": "The answer stays inside the supplied evidence.",
+                        "result": "Pass",
+                    },
+                ],
+                errors_reviewed=True,
+            )
+        ),
+        encoding="utf-8",
+    )
+    report = tmp_path / "leakage.json"
+
+    assert main(
+        [
+            "check-leakage",
+            str(evaluator_path),
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
+            "--splits",
+            "test",
+            "--out",
+            str(report),
+        ]
+    ) == 1
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "1.0"
+    assert payload["clean"] is False
+    assert payload["leaked_records"] == 1
+    assert payload["matches"][0]["split"] == "test"
+    assert payload["matches"][0]["record_index"] == 0
+    assert payload["matches"][0]["location"] == "expert_examples[1].input"
+    assert "Leak: test[0] field input" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "check-leakage",
+                str(evaluator_path),
+                "--split-manifest",
+                str(split_dir / "split_manifest.json"),
+                "--splits",
+                "holdout",
+            ]
+        )
+
+
+def test_validate_judge_refuses_an_evaluator_that_saw_the_test_split(tmp_path, capsys):
+    split_dir, test_records, workspace = _text_split_fixture(tmp_path)
+    evaluator_path = workspace / "evaluators" / "leaky.json"
+    evaluator_path.write_text(
+        json.dumps(
+            build_evaluator_definition(
+                "Unsupported claim",
+                {"description": "The answer asserts facts absent from the supplied evidence."},
+                input_fields=["input", "output"],
+                source_annotation_ids=["0", "1"],
+                expert_examples=[
+                    {
+                        "input": {"input": test_records[1]["input"]},
+                        "critique": "The answer invents a refund window.",
+                        "result": "Fail",
+                    },
+                    {
+                        "input": {"input": "Where can I see my past orders?"},
+                        "critique": "The answer stays inside the supplied evidence.",
+                        "result": "Pass",
+                    },
+                ],
+                errors_reviewed=True,
+            )
+        ),
+        encoding="utf-8",
+    )
+    report = tmp_path / "validation.json"
+    arguments = [
+        "validate-judge",
+        str(split_dir / "test.jsonl"),
+        "--human-column",
+        "human_label",
+        "--judge-column",
+        "judge_label",
+        "--split-manifest",
+        str(split_dir / "split_manifest.json"),
+        "--bootstrap-iterations",
+        "50",
+        "--evaluator",
+        str(evaluator_path),
+        "--out",
+        str(report),
+    ]
+
+    assert main(arguments) == 1
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["metrics"]["tpr"] == 1.0
+    assert payload["gate_passed"] is False
+    assert payload["leakage"]["clean"] is False
+    assert payload["leakage"]["leaked_records"] == 1
+    assert any("reuses text" in blocker for blocker in payload["gate_blockers"])
+    assert "Blocker: evaluator definition reuses text" in capsys.readouterr().out
+    assert json.loads(evaluator_path.read_text(encoding="utf-8"))["status"] == "validation_failed"
+
+
+def test_validate_judge_accepts_an_evaluator_seeded_from_train(tmp_path):
+    split_dir, _, workspace = _text_split_fixture(tmp_path)
+    assert main(
+        [
+            "promote",
+            str(workspace),
+            "Unsupported claim",
+            "--errors-reviewed",
+            "--train-split",
+            str(split_dir / "train.jsonl"),
+            "--input-fields",
+            "input",
+            "output",
+        ]
+    ) == 0
+    evaluator_path = workspace / "evaluators" / "failure-unsupported-claim.json"
+    report = tmp_path / "validation.json"
+
+    assert main(
+        [
+            "validate-judge",
+            str(split_dir / "test.jsonl"),
+            "--human-column",
+            "human_label",
+            "--judge-column",
+            "judge_label",
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
+            "--bootstrap-iterations",
+            "50",
+            "--evaluator",
+            str(evaluator_path),
+            "--out",
+            str(report),
+        ]
+    ) == 0
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["gate_passed"] is True
+    assert payload["gate_blockers"] == []
+    assert payload["leakage"]["clean"] is True
+    assert payload["leakage"]["records_with_field"]["input"] == len(
+        (split_dir / "test.jsonl").read_text().splitlines()
+    )
+
+
 def _validated_judge_fixture(tmp_path):
     labels = tmp_path / "labels.jsonl"
     write_jsonl(

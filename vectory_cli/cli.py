@@ -14,12 +14,17 @@ from importlib import resources
 from pathlib import Path
 
 from components.eval_workflow import (
+    DEFAULT_MINIMUM_CHARACTERS,
+    HELD_OUT_SPLITS,
     JudgeValidationReport,
+    LeakageReport,
     SuccessRateReport,
     archive_review_workspace,
     bootstrap_metric_intervals,
     build_evaluator_definition,
     dataframe_to_records,
+    describe_leakage,
+    detect_evaluator_leakage,
     dump_evaluator_definition,
     estimate_success_rate,
     initialize_review_workspace,
@@ -30,6 +35,7 @@ from components.eval_workflow import (
     save_jsonl_records,
     select_diverse_samples,
     split_labeled_records,
+    train_split_expert_examples,
     validate_evaluator_labels,
 )
 
@@ -287,6 +293,15 @@ def run_promote(args: argparse.Namespace) -> int:
         available = ", ".join(sorted(taxonomy)) or "none"
         raise ValueError(f"Unknown failure mode {args.failure_mode!r}. Available modes: {available}")
     fields = args.input_fields or ["input", "output", "reference", "trace"]
+    if args.train_split:
+        expert_examples = train_split_expert_examples(
+            _load_records(args.train_split),
+            input_fields=fields,
+            label_field=args.train_label_column,
+            critique_field=args.train_critique_column,
+        )
+        source_ids = [example["source_id"] for example in expert_examples]
+        return _write_promoted_evaluator(args, taxonomy, fields, expert_examples, source_ids)
     failure_examples = []
     pass_examples = []
     for key, annotation in workspace["annotations"].items():
@@ -313,6 +328,16 @@ def run_promote(args: argparse.Namespace) -> int:
             pass_examples.append(example)
     expert_examples = [*failure_examples[:4], *pass_examples[:4]]
     source_ids = [example["annotation_id"] for example in expert_examples]
+    return _write_promoted_evaluator(args, taxonomy, fields, expert_examples, source_ids)
+
+
+def _write_promoted_evaluator(
+    args: argparse.Namespace,
+    taxonomy: dict,
+    fields: list[str],
+    expert_examples: list[dict],
+    source_ids: list[str],
+) -> int:
     evaluator = build_evaluator_definition(
         args.failure_mode,
         taxonomy[args.failure_mode],
@@ -330,10 +355,56 @@ def run_promote(args: argparse.Namespace) -> int:
     else:
         target = save_evaluator_definition(args.workspace, evaluator)
     print(f"Created draft evaluator: {target}")
+    print(
+        f"Attached {len(expert_examples)} expert examples from "
+        f"{'the train split' if args.train_split else 'workspace annotations'}."
+    )
     if not args.errors_reviewed:
         print("Checkpoint pending: review and fix obvious product errors before judge automation.")
     print("Status: draft_unvalidated. Validate it against held-out human labels before using it as a gate.")
+    print("Run 'vectory check-leakage' to confirm no dev or test record reached this definition.")
     return 0
+
+
+def _held_out_split_records(manifest_path: Path, names: list[str]) -> dict[str, list[dict]]:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != "1.0":
+        raise ValueError("Split manifest must use schema_version 1.0")
+    artifacts = manifest.get("artifacts") or {}
+    splits = {}
+    for name in names:
+        artifact = artifacts.get(name)
+        if not isinstance(artifact, dict) or not artifact.get("path"):
+            raise ValueError(f"Split manifest does not describe a {name} artifact")
+        splits[name] = _load_records(manifest_path.parent / str(artifact["path"]))
+    return splits
+
+
+def run_check_leakage(args: argparse.Namespace) -> int:
+    evaluator = json.loads(args.evaluator.read_text(encoding="utf-8"))
+    splits = _held_out_split_records(args.split_manifest, args.splits)
+    report = detect_evaluator_leakage(
+        evaluator,
+        splits,
+        text_fields=args.text_fields,
+        minimum_characters=args.min_characters,
+    )
+    typed_report = LeakageReport.model_validate(report)
+    if args.out:
+        _write_json(args.out, typed_report.model_dump(mode="json", by_alias=True))
+        print(f"Wrote leakage report: {args.out}")
+    checked = ", ".join(f"{name}={count}" for name, count in sorted(report["checked_splits"].items()))
+    print(f"Checked records: {checked}")
+    print(f"Compared fields: {', '.join(report['text_fields'])}")
+    if not any(report["records_with_field"].values()):
+        print("Warning: none of the compared fields exist in these records; pass --text-fields.")
+    for match in report["matches"]:
+        print(
+            f"Leak: {match['split']}[{match['record_index']}] field {match['field']} "
+            f"appears in {match['location']}"
+        )
+    print("Leakage: CLEAN" if report["clean"] else f"Leakage: {report['leaked_records']} records")
+    return 0 if report["clean"] else 1
 
 
 def run_split_labels(args: argparse.Namespace) -> int:
@@ -475,6 +546,13 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         "groups": group_reports,
     }
     if evaluator is not None:
+        leakage = detect_evaluator_leakage(
+            evaluator,
+            {"test": records},
+            text_fields=args.text_fields,
+            minimum_characters=args.min_leakage_characters,
+        )
+        report["leakage"] = leakage
         lifecycle = evaluator.lifecycle_checkpoints
         checkpoint_labels = {
             "human_review_completed": "human review is incomplete",
@@ -483,15 +561,17 @@ def run_validate_judge(args: argparse.Namespace) -> int:
                 "expert examples do not include both Pass and Fail critiques"
             ),
         }
-        incomplete_checkpoints = [
+        blockers = [
             message
             for checkpoint, message in checkpoint_labels.items()
             if getattr(lifecycle, checkpoint) is not True
         ]
-        if incomplete_checkpoints:
+        if not leakage["clean"]:
+            blockers.append(describe_leakage(leakage))
+        if blockers:
             gate_passed = False
             report["gate_passed"] = False
-            report["gate_blockers"] = incomplete_checkpoints
+            report["gate_blockers"] = blockers
 
     typed_report = JudgeValidationReport.model_validate(report)
     if evaluator is not None:
@@ -510,6 +590,8 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         f"TNR={metrics['tnr'] if metrics['tnr'] is not None else 'n/a'}, "
         f"balanced_accuracy={metrics['balanced_accuracy'] if metrics['balanced_accuracy'] is not None else 'n/a'}"
     )
+    for blocker in typed_report.gate_blockers:
+        print(f"Blocker: {blocker}")
     print("Gate: PASS" if gate_passed else "Gate: FAIL")
     return 0 if gate_passed else 1
 
@@ -747,8 +829,60 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Confirm obvious product errors were fixed or reviewed before judge automation.",
     )
+    promote_parser.add_argument(
+        "--train-split",
+        type=Path,
+        help=(
+            "Train split JSONL whose labeled, critiqued records supply the judge examples "
+            "instead of the first workspace annotations."
+        ),
+    )
+    promote_parser.add_argument(
+        "--train-label-column",
+        default="human_label",
+        help="Pass/Fail label column in the train split. Default: human_label.",
+    )
+    promote_parser.add_argument(
+        "--train-critique-column",
+        default="critique",
+        help="Expert critique column in the train split. Default: critique.",
+    )
     promote_parser.add_argument("--out", type=Path, help="Optional output path outside the workspace.")
     promote_parser.set_defaults(func=run_promote)
+
+    leakage_parser = subparsers.add_parser(
+        "check-leakage",
+        help="Report held-out records whose text appears in an evaluator definition.",
+    )
+    leakage_parser.add_argument("evaluator", type=Path, help="Evaluator JSON definition.")
+    leakage_parser.add_argument(
+        "--split-manifest",
+        type=Path,
+        required=True,
+        help="Manifest written by split-labels; locates the held-out split files.",
+    )
+    leakage_parser.add_argument(
+        "--splits",
+        nargs="+",
+        default=list(HELD_OUT_SPLITS),
+        help="Split names to check. Default: dev test.",
+    )
+    leakage_parser.add_argument(
+        "--text-fields",
+        nargs="+",
+        help="Record fields compared against the definition. Default: the evaluator's input fields.",
+    )
+    leakage_parser.add_argument(
+        "--min-characters",
+        type=int,
+        default=DEFAULT_MINIMUM_CHARACTERS,
+        help=(
+            "Ignore normalized texts shorter than this many characters. "
+            f"Default: {DEFAULT_MINIMUM_CHARACTERS}."
+        ),
+    )
+    leakage_parser.add_argument("--out", type=Path, help="Optional JSON leakage report path.")
+    leakage_parser.set_defaults(func=run_check_leakage)
 
     split_parser = subparsers.add_parser(
         "split-labels",
@@ -801,6 +935,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--group-by",
         nargs="+",
         help="Report metrics by dimensions such as feature, scenario, or persona.",
+    )
+    validate_parser.add_argument(
+        "--text-fields",
+        nargs="+",
+        help=(
+            "Test-record fields checked for leakage into the evaluator definition. "
+            "Default: the evaluator's input fields."
+        ),
+    )
+    validate_parser.add_argument(
+        "--min-leakage-characters",
+        type=int,
+        default=DEFAULT_MINIMUM_CHARACTERS,
+        help=(
+            "Ignore normalized texts shorter than this many characters. "
+            f"Default: {DEFAULT_MINIMUM_CHARACTERS}."
+        ),
     )
     validate_parser.set_defaults(func=run_validate_judge)
 

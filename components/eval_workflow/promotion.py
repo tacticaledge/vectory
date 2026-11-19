@@ -13,6 +13,7 @@ from .schemas import (
     dump_evaluator_definition,
     parse_evaluator_definition,
 )
+from .validation import normalize_binary_label
 
 
 def _slugify(value: str) -> str:
@@ -25,6 +26,50 @@ def _example_texts(failure_mode: Mapping[str, Any]) -> list[str]:
     if isinstance(examples, str):
         examples = [examples]
     return [str(example).strip() for example in examples if str(example).strip()]
+
+
+def train_split_expert_examples(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    input_fields: Sequence[str],
+    label_field: str,
+    critique_field: str,
+    id_field: str = "id",
+    limit_per_class: int = 4,
+) -> list[dict[str, Any]]:
+    """Select balanced judge examples from the train split only.
+
+    Drawing examples from the train partition keeps dev and test records out of the
+    evaluator definition, so later validation measures the judge on text it never saw.
+    Records without an expert critique are skipped, because an example without the
+    reasoning behind its verdict cannot teach the judge.
+    """
+    if limit_per_class < 1:
+        raise ValueError("At least one example per class is required")
+    fields = list(input_fields)
+    grouped: dict[str, list[dict[str, Any]]] = {"Fail": [], "Pass": []}
+    for index, record in enumerate(records):
+        if label_field not in record:
+            raise ValueError(f"Train split record {index} is missing the label field: {label_field}")
+        critique = str(record.get(critique_field) or "").strip()
+        if not critique:
+            continue
+        result = normalize_binary_label(record[label_field])
+        source = record.get(id_field)
+        grouped[result].append(
+            {
+                "source_id": f"train:{source if source is not None else index}",
+                "input": {field: record.get(field) for field in fields if field in record},
+                "critique": critique,
+                "result": result,
+            }
+        )
+    examples = [*grouped["Fail"][:limit_per_class], *grouped["Pass"][:limit_per_class]]
+    if not examples:
+        raise ValueError(
+            f"No train split record carries a non-empty {critique_field!r} critique"
+        )
+    return examples
 
 
 def validate_evaluator_definition(

@@ -47,17 +47,24 @@ vectory discover traces.jsonl \
 After expert review and taxonomy acceptance, promote and validate a focused evaluator:
 
 ```bash
-vectory promote eval-review "Unsupported claim" --errors-reviewed
 vectory split-labels judge-labels.jsonl \
   --label-column human_label \
   --judge-column judge_label \
   --out judge-splits
+vectory promote eval-review "Unsupported claim" \
+  --errors-reviewed \
+  --train-split judge-splits/train.jsonl
+vectory check-leakage eval-review/evaluators/failure-unsupported-claim.json \
+  --split-manifest judge-splits/split_manifest.json
 vectory validate-judge judge-splits/test.jsonl \
   --human-column human_label \
   --judge-column judge_label \
   --split-manifest judge-splits/split_manifest.json \
-  --out judge-validation.json
+  --out judge-validation.json \
+  --evaluator eval-review/evaluators/failure-unsupported-claim.json
 ```
+
+Judge examples come from the train split only, so dev and test records stay unseen. `vectory check-leakage` lists every dev or test record whose text appears in an evaluator definition after lowercasing and collapsing whitespace, and `vectory validate-judge` refuses an evaluator whose definition overlaps the test split.
 
 Estimate the true pass rate of judged outputs, corrected for judge error, with a 95% interval:
 
