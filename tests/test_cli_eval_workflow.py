@@ -197,7 +197,14 @@ def _validated_judge_fixture(tmp_path):
     production = tmp_path / "production.jsonl"
     write_jsonl(
         production,
-        [{"id": index, "verdict": "Pass" if index < 180 else "Fail"} for index in range(200)],
+        [
+            {
+                "id": index,
+                "verdict": "Pass" if index < 180 else "Fail",
+                "evaluator_id": "failure-unsupported-claim",
+            }
+            for index in range(200)
+        ],
     )
     arguments = [
         "estimate",
@@ -246,6 +253,8 @@ def test_estimate_gates_on_interval_lower_bound(tmp_path, capsys):
     assert report["gate_passed"] is True
     assert report["gate_blockers"] == []
     assert report["provenance"]["verified"] is True
+    assert report["evaluator_id"] == "failure-unsupported-claim"
+    assert report["dataset_evaluator_column"] == "evaluator_id"
     assert "corrected=0.900" in capsys.readouterr().out
 
     assert main([*arguments, "--evaluator", str(evaluator_path), "--min-pass-rate", "0.95"]) == 1
@@ -303,6 +312,74 @@ def test_estimate_gate_rejects_reordered_predictions_with_same_totals(tmp_path):
     assert report["gate_blockers"] == [
         "test set labels do not match the evaluator's validation report"
     ]
+
+
+def test_estimate_gate_rejects_judged_rows_without_an_evaluator(tmp_path):
+    arguments, validate_arguments, evaluator_path, _ = _validated_judge_fixture(tmp_path)
+    assert main(validate_arguments) == 0
+    production = tmp_path / "production.jsonl"
+    records = [json.loads(line) for line in production.read_text().splitlines()]
+    records[7].pop("evaluator_id")
+    write_jsonl(production, records)
+    out = tmp_path / "estimate.json"
+
+    assert main(
+        [*arguments, "--evaluator", str(evaluator_path), "--min-pass-rate", "0.5", "--out", str(out)]
+    ) == 1
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["gate_passed"] is False
+    assert report["gate_blockers"] == [
+        "judged dataset does not record 'evaluator_id' on every row, "
+        "so its labels cannot be attributed to evaluator failure-unsupported-claim"
+    ]
+
+
+def test_estimate_gate_rejects_labels_from_another_evaluator(tmp_path):
+    arguments, validate_arguments, evaluator_path, _ = _validated_judge_fixture(tmp_path)
+    assert main(validate_arguments) == 0
+    production = tmp_path / "production.jsonl"
+    records = [json.loads(line) for line in production.read_text().splitlines()]
+    for record in records:
+        record["evaluator_id"] = "failure-wrong-tone"
+    write_jsonl(production, records)
+    out = tmp_path / "estimate.json"
+
+    assert main(
+        [*arguments, "--evaluator", str(evaluator_path), "--min-pass-rate", "0.5", "--out", str(out)]
+    ) == 1
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["gate_blockers"] == [
+        "judged dataset labels were produced by evaluator failure-wrong-tone, "
+        "not failure-unsupported-claim"
+    ]
+
+
+def test_estimate_gate_accepts_a_renamed_evaluator_column(tmp_path):
+    arguments, validate_arguments, evaluator_path, _ = _validated_judge_fixture(tmp_path)
+    assert main(validate_arguments) == 0
+    production = tmp_path / "production.jsonl"
+    records = [json.loads(line) for line in production.read_text().splitlines()]
+    for record in records:
+        record["judged_by"] = record.pop("evaluator_id")
+    write_jsonl(production, records)
+    out = tmp_path / "estimate.json"
+
+    assert main(
+        [
+            *arguments,
+            "--evaluator",
+            str(evaluator_path),
+            "--dataset-evaluator-column",
+            "judged_by",
+            "--min-pass-rate",
+            "0.8",
+            "--out",
+            str(out),
+        ]
+    ) == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["gate_passed"] is True
+    assert report["dataset_evaluator_column"] == "judged_by"
 
 
 def test_validate_judge_fails_ci_when_one_class_is_missed(tmp_path):

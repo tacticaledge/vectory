@@ -174,6 +174,8 @@ class SuccessRateReport(StrictModel):
     provenance: SplitProvenance
     judge_label_column: str = Field(min_length=1)
     evaluator: str | None = None
+    evaluator_id: str | None = None
+    dataset_evaluator_column: str | None = None
     estimate: SuccessRateEstimate
     minimum_pass_rate: float | None = Field(default=None, ge=0, le=1)
     gate_passed: bool | None = None

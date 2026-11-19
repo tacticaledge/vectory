@@ -71,6 +71,8 @@ vectory estimate production-judged.jsonl \
   --min-pass-rate 0.90
 ```
 
+When gating, every judged row must carry an `evaluator_id` field naming the evaluator that produced its label, so a validated evaluator's accuracy is never applied to another judge's labels. Use `--dataset-evaluator-column` if your field has a different name.
+
 See the [human-grounded evaluation workflow](docs/evaluation_workflow.md) for the app flow, artifact schema, validation metrics, and CI behavior.
 
 Run the included agent benchmark example from the CLI:

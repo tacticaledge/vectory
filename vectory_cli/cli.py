@@ -553,10 +553,12 @@ def run_estimate(args: argparse.Namespace) -> int:
     )
 
     blockers = []
+    evaluator_id = None
     if args.evaluator is not None:
         evaluator = parse_evaluator_definition(
             json.loads(args.evaluator.read_text(encoding="utf-8"))
         )
+        evaluator_id = evaluator.evaluator_id
         last_report = evaluator.validation.last_report
         if evaluator.status != "validated" or not evaluator.validation.validated:
             blockers.append(f"evaluator status is {evaluator.status}, not validated")
@@ -568,6 +570,22 @@ def run_estimate(args: argparse.Namespace) -> int:
             test_records, [args.human_column, test_judge_column]
         ):
             blockers.append("test set labels do not match the evaluator's validation report")
+        # The validated metrics only describe this evaluator, so every judged row
+        # must name the evaluator that produced its label.
+        declared = {
+            str(record.get(args.dataset_evaluator_column) or "").strip() for record in records
+        }
+        if "" in declared:
+            blockers.append(
+                f"judged dataset does not record {args.dataset_evaluator_column!r} on every row, "
+                f"so its labels cannot be attributed to evaluator {evaluator_id}"
+            )
+        foreign = sorted(value for value in declared if value and value != evaluator_id)
+        if foreign:
+            blockers.append(
+                f"judged dataset labels were produced by evaluator {', '.join(foreign[:3])}, "
+                f"not {evaluator_id}"
+            )
     interval = estimate["confidence_interval_95"]
     gate_passed = None
     if args.min_pass_rate is not None:
@@ -581,6 +599,10 @@ def run_estimate(args: argparse.Namespace) -> int:
             "provenance": provenance,
             "judge_label_column": args.judge_column,
             "evaluator": str(args.evaluator) if args.evaluator else None,
+            "evaluator_id": evaluator_id,
+            "dataset_evaluator_column": (
+                args.dataset_evaluator_column if args.evaluator else None
+            ),
             "estimate": estimate,
             "minimum_pass_rate": args.min_pass_rate,
             "gate_passed": gate_passed,
@@ -809,6 +831,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--evaluator",
         type=Path,
         help="Evaluator JSON that must be validated on this test set before the estimate can gate.",
+    )
+    estimate_parser.add_argument(
+        "--dataset-evaluator-column",
+        default="evaluator_id",
+        help=(
+            "Dataset field naming the evaluator that produced each judge label. "
+            "Checked against --evaluator. Default: evaluator_id."
+        ),
     )
     estimate_parser.add_argument("--bootstrap-iterations", type=int, default=20000)
     estimate_parser.add_argument("--seed", type=int, default=42)
