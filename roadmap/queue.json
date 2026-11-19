@@ -1,0 +1,170 @@
+{
+  "schema_version": "1.0",
+  "description": "Feature queue for the automated build pipeline. Lowest priority number ships first; ties ship oldest first.",
+  "items": [
+    {
+      "id": "corrected-success-rate",
+      "title": "Estimate the true pass rate corrected for judge error",
+      "summary": "Add a vectory estimate command that corrects a judge's observed pass rate with the Rogan-Gladen estimator using TPR and TNR from the verified held-out test split, reports a 95% bootstrap interval, and can gate on the interval's lower bound.",
+      "acceptance": [
+        "vectory estimate reports observed rate, corrected rate, and a 95% bootstrap interval",
+        "--min-pass-rate gates on the lower bound of the interval"
+      ],
+      "sources": ["https://doi.org/10.1093/oxfordjournals.aje.a112510"],
+      "priority": 1,
+      "origin": "seed",
+      "status": "shipped",
+      "added": "2026-11-18"
+    },
+    {
+      "id": "pass-hat-k",
+      "title": "Unbiased pass@k and pass^k reliability metrics for repeated runs",
+      "summary": "The benchmark leaderboard's robust_pass_at_5 only checks whether any of the first five runs passed. Add the unbiased pass@k estimator 1 - C(n-c,k)/C(n,k) and pass^k = C(c,k)/C(n,k), which measures whether a task passes on every one of k tries. Report both per task and overall in the leaderboard and benchmark report.",
+      "acceptance": [
+        "Library functions compute pass@k and pass^k from n trials with c successes, validated against hand-computed cases such as n=8, c=6, k=4",
+        "Benchmark leaderboard and report include pass@k and pass^k when tasks have repeated runs",
+        "Existing robust_pass_at_5 output stays backward compatible"
+      ],
+      "sources": ["https://arxiv.org/abs/2107.03374", "https://arxiv.org/abs/2406.12045"],
+      "priority": 1,
+      "origin": "seed",
+      "status": "queued",
+      "added": "2026-11-18"
+    },
+    {
+      "id": "fewshot-from-train-split",
+      "title": "Draw promoted judge few-shot examples from the train split only",
+      "summary": "vectory promote takes the first four Fail and four Pass annotations from the workspace as judge examples, which can leak records that later land in the dev or test split. Let promote accept a train split file for examples, and add a check that fails when any dev or test input text appears in an evaluator's prompt or examples after lowercasing and collapsing whitespace.",
+      "acceptance": [
+        "promote can take examples from a train split JSONL instead of the first workspace annotations",
+        "A leakage check reports every dev or test record whose normalized input text appears in an evaluator definition",
+        "validate-judge refuses an evaluator whose examples overlap the test split"
+      ],
+      "sources": ["https://scikit-learn.org/stable/common_pitfalls.html#data-leakage"],
+      "priority": 1,
+      "origin": "seed",
+      "status": "queued",
+      "added": "2026-11-18"
+    },
+    {
+      "id": "rag-metrics-cli-and-page",
+      "title": "Expose the existing RAG retrieval metrics in the CLI and app",
+      "summary": "components/evaluators/rag_metrics.py implements precision@k, recall@k, MRR, NDCG and embedding-based context metrics, but no page or command uses them. Add a vectory rag command that scores a JSONL of queries with retrieved and relevant document ids at a configurable k, and a Streamlit page section that shows the same metrics per query and in aggregate.",
+      "acceptance": [
+        "vectory rag scores precision@k, recall@k, MRR and NDCG@k from retrieved and relevant id columns",
+        "Metrics are verified against hand-computed examples, including queries with no relevant results in the top k",
+        "The app shows per-query and aggregate retrieval metrics for an uploaded dataset"
+      ],
+      "sources": ["https://en.wikipedia.org/wiki/Discounted_cumulative_gain", "https://en.wikipedia.org/wiki/Mean_reciprocal_rank"],
+      "priority": 2,
+      "origin": "seed",
+      "status": "queued",
+      "added": "2026-11-18"
+    },
+    {
+      "id": "inter-annotator-agreement",
+      "title": "Inter-annotator agreement with Cohen's and Fleiss' kappa",
+      "summary": "Human review supports one annotator. Add an agreement command and library functions that compute percent agreement, Cohen's kappa for two raters and Fleiss' kappa for three or more, with Landis-Koch interpretation bands, and list the records where annotators disagree so teams can revise the rubric.",
+      "acceptance": [
+        "Cohen's and Fleiss' kappa match reference values on published worked examples",
+        "vectory agreement reads a JSONL with one label column per annotator and writes a report with disagreements",
+        "The report recommends rubric revision when kappa is below 0.6"
+      ],
+      "sources": ["https://en.wikipedia.org/wiki/Cohen%27s_kappa", "https://en.wikipedia.org/wiki/Fleiss%27_kappa"],
+      "priority": 2,
+      "origin": "seed",
+      "status": "queued",
+      "added": "2026-11-18"
+    },
+    {
+      "id": "otel-genai-trace-import",
+      "title": "Import OpenTelemetry GenAI spans as reviewable traces",
+      "summary": "Trace ingestion accepts JSON, JSONL and CSV with generic event fields. Add an importer that converts OpenTelemetry spans using the GenAI semantic conventions (chat, execute_tool, invoke_agent operations) into Vectory's trace records, preserving span nesting, tool call arguments and results, token usage, and treating missing usage as unknown rather than zero.",
+      "acceptance": [
+        "An importer converts OTLP JSON spans with gen_ai attributes into nested trace records",
+        "Tool call spans keep name, call id, arguments and result",
+        "Missing token usage stays unknown in the converted records",
+        "discover accepts the converted traces"
+      ],
+      "sources": ["https://opentelemetry.io/docs/specs/semconv/gen-ai/"],
+      "priority": 2,
+      "origin": "seed",
+      "status": "queued",
+      "added": "2026-11-18"
+    },
+    {
+      "id": "regression-capability-gate",
+      "title": "Separate regression and capability tasks in the release gate",
+      "summary": "The gate treats every task the same. Let benchmark tasks declare a kind of regression or capability. Any regression failure blocks the release; a capability task blocks only when its pass count across repeated runs falls below a recorded baseline. Report both groups separately.",
+      "acceptance": [
+        "Tasks may declare kind regression or capability, defaulting to regression",
+        "The gate blocks on any regression failure and on capability tasks that fall below a baseline file",
+        "The gate report lists regression and capability results separately"
+      ],
+      "sources": ["https://arxiv.org/abs/2406.12045"],
+      "priority": 2,
+      "origin": "seed",
+      "status": "queued",
+      "added": "2026-11-18"
+    },
+    {
+      "id": "dimension-synthetic-queries",
+      "title": "Generate synthetic test queries from product dimensions",
+      "summary": "Add a vectory synth command that takes user-defined dimensions such as persona, intent and difficulty, enumerates or samples dimension tuples, and optionally asks a configured LLM to turn each tuple into a natural-language query. Output JSONL keeps the tuple fields so discover and validate-judge can group by them.",
+      "acceptance": [
+        "Dimensions are read from a YAML or JSON file and tuples are deduplicated",
+        "A dry-run mode writes tuples without calling an LLM",
+        "Generated records keep every dimension field for later grouping"
+      ],
+      "sources": ["https://arxiv.org/abs/2404.12272"],
+      "priority": 3,
+      "origin": "seed",
+      "status": "queued",
+      "added": "2026-11-18"
+    },
+    {
+      "id": "review-ui-speed",
+      "title": "Faster trace review with keyboard shortcuts, defer, and filters",
+      "summary": "The review pages use buttons only. Add keyboard shortcuts for pass, fail, defer, previous and next, a defer state that keeps a record in the queue, text and metadata filters over the sample, and require a written critique before saving a Fail.",
+      "acceptance": [
+        "Keyboard shortcuts work for pass, fail, defer, previous and next",
+        "Deferred records stay unannotated and can be filtered",
+        "Saving a Fail without a critique shows an error"
+      ],
+      "sources": ["https://arxiv.org/abs/2404.12272"],
+      "priority": 3,
+      "origin": "seed",
+      "status": "queued",
+      "added": "2026-11-18"
+    },
+    {
+      "id": "cost-score-pareto",
+      "title": "Cost versus score Pareto view across judge or agent configurations",
+      "summary": "Runs already record token usage and list-price cost. Add a comparison that takes several run reports, marks configurations dominated by another with an equal or better score at equal or lower cost, and shows the frontier in the app and as a CLI table.",
+      "acceptance": [
+        "Dominance is computed correctly, including ties",
+        "The CLI prints a frontier table and the app plots score against cost with frontier points highlighted"
+      ],
+      "sources": ["https://en.wikipedia.org/wiki/Pareto_front"],
+      "priority": 3,
+      "origin": "seed",
+      "status": "queued",
+      "added": "2026-11-18"
+    },
+    {
+      "id": "guardrail-validation",
+      "title": "Validate guardrails with block rate and false-block rate",
+      "summary": "Reuse the judge validation metrics to evaluate a guardrail or safety classifier: given attack and benign examples with the guardrail's verdicts, report block rate, false-block rate, bootstrap intervals and per-category breakdowns, and gate on minimum values.",
+      "acceptance": [
+        "A command reports block rate on attacks and false-block rate on benign requests with 95% intervals",
+        "Results break down by attack category",
+        "Thresholds can gate CI"
+      ],
+      "sources": ["https://genai.owasp.org/llm-top-10/"],
+      "priority": 3,
+      "origin": "seed",
+      "status": "queued",
+      "added": "2026-11-18"
+    }
+  ]
+}

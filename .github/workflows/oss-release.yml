@@ -1,0 +1,84 @@
+name: Automated Release
+
+# Weekly: when features or fixes merged since the last tag, bump the version,
+# update CHANGELOG.md, tag, create a GitHub release, and run the existing
+# PyPI publish workflow on the tag.
+
+on:
+  schedule:
+    - cron: "0 15 * * 5"
+  workflow_dispatch:
+
+concurrency:
+  group: oss-automation-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Tag and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Prepare release
+        id: prepare
+        run: |
+          VERSION=$(python3 .github/automation/release.py)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ -z "$VERSION" ]; then
+            echo "No features or fixes since the last release."
+          fi
+
+      - name: Test release candidate
+        if: ${{ steps.prepare.outputs.version != '' }}
+        run: |
+          python -m pip install --upgrade pip build twine && python -m pip install -e ".[dev]"
+          python -m pytest -q
+          python -m build
+          python -m twine check dist/*
+
+      - name: Commit, tag, and publish
+        if: ${{ steps.prepare.outputs.version != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.prepare.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add components/__init__.py CHANGELOG.md
+          git commit -q -m "chore(release): v${VERSION}"
+          git tag -a "v${VERSION}" -m "v${VERSION}"
+          git push --atomic origin HEAD:main "v${VERSION}"
+          python3 - "$VERSION" > "${RUNNER_TEMP}/notes.md" <<'PY'
+          import sys
+          heading = f"## {sys.argv[1]} "
+          lines, capture = [], False
+          for line in open("CHANGELOG.md", encoding="utf-8"):
+              if line.startswith("## "):
+                  if capture:
+                      break
+                  capture = line.startswith(heading)
+                  continue
+              if capture:
+                  lines.append(line)
+          print("".join(lines).strip())
+          PY
+          gh release create "v${VERSION}" --title "v${VERSION}" --notes-file "${RUNNER_TEMP}/notes.md" --verify-tag
+          # Tags pushed with the workflow token do not trigger other workflows, so
+          # dispatch the publish workflow on the new tag explicitly.
+          gh workflow run publish-python.yml --ref "v${VERSION}"

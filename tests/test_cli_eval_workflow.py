@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -22,7 +23,8 @@ def test_cli_version_uses_authoritative_component_version(capsys):
         main(["--version"])
 
     assert error.value.code == 0
-    assert cli_version == component_version == "1.1.1"
+    assert cli_version == component_version
+    assert re.fullmatch(r"\d+\.\d+\.\d+", component_version)
     assert capsys.readouterr().out.strip() == f"Vectory CLI {component_version}"
 
 
