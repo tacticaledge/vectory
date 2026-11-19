@@ -10,6 +10,7 @@ import numpy as np
 
 _PASS_LABELS = {"pass", "passed", "true", "1", "yes", "good", "positive"}
 _FAIL_LABELS = {"fail", "failed", "false", "0", "no", "bad", "negative"}
+_BOOTSTRAP_CELLS_PER_CHUNK = 2_000_000
 
 
 def normalize_binary_label(value: Any) -> str:
@@ -117,6 +118,86 @@ def bootstrap_metric_intervals(
             else None
         )
         for metric, values in (("tpr", measurements["tpr"]), ("tnr", measurements["tnr"]))
+    }
+
+
+def corrected_success_rate(observed_pass_rate: float, tpr: float, tnr: float) -> float:
+    """Correct an observed judge pass rate for judge error (Rogan-Gladen estimator)."""
+    for name, value in (("Observed pass rate", observed_pass_rate), ("TPR", tpr), ("TNR", tnr)):
+        if not 0 <= value <= 1:
+            raise ValueError(f"{name} must be between 0 and 1")
+    denominator = tpr + tnr - 1
+    if denominator <= 0:
+        raise ValueError(
+            "Judge is no better than chance (TPR + TNR <= 1), so its pass rate cannot be corrected"
+        )
+    return float(min(1.0, max(0.0, (observed_pass_rate + tnr - 1) / denominator)))
+
+
+def estimate_success_rate(
+    judge_labels: Sequence[Any],
+    human_labels: Sequence[Any],
+    evaluator_labels: Sequence[Any],
+    *,
+    iterations: int = 20000,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """Estimate the true pass rate of unlabeled outputs from imperfect judge labels.
+
+    ``judge_labels`` are the evaluator's verdicts on the unlabeled population.
+    ``human_labels`` and ``evaluator_labels`` are the held-out test pairs used to
+    measure judge accuracy. The 95% interval bootstraps the test pairs and the
+    judged population together, so it reflects uncertainty in TPR, TNR, and the
+    observed pass rate.
+    Resamples that lack a class or leave the judge at or below chance cannot be
+    corrected; they count as 0 for the lower bound and 1 for the upper bound, so
+    they widen the interval instead of being dropped.
+    """
+    if iterations <= 0:
+        raise ValueError("Bootstrap iterations must be positive")
+    if not judge_labels:
+        raise ValueError("At least one judge label is required")
+    observed = np.array([normalize_binary_label(value) for value in judge_labels])
+    observed_pass_rate = float(np.mean(observed == "Pass"))
+    metrics = validate_evaluator_labels(human_labels, evaluator_labels)
+    if metrics["tpr"] is None or metrics["tnr"] is None:
+        raise ValueError("Test labels must include both Pass and Fail examples")
+    estimate = corrected_success_rate(observed_pass_rate, metrics["tpr"], metrics["tnr"])
+
+    human_pass = np.array([normalize_binary_label(value) == "Pass" for value in human_labels])
+    judge_pass = np.array([normalize_binary_label(value) == "Pass" for value in evaluator_labels])
+    rng = np.random.default_rng(seed)
+    estimates = np.empty(iterations)
+    usable = np.empty(iterations, dtype=bool)
+    # Resample in bounded chunks so memory stays flat for large test sets.
+    chunk_size = max(1, _BOOTSTRAP_CELLS_PER_CHUNK // len(human_pass))
+    for start in range(0, iterations, chunk_size):
+        stop = min(start + chunk_size, iterations)
+        sampled_rate = rng.binomial(len(observed), observed_pass_rate, size=stop - start) / len(observed)
+        indices = rng.integers(0, len(human_pass), size=(stop - start, len(human_pass)))
+        sampled_human = human_pass[indices]
+        sampled_judge = judge_pass[indices]
+        pass_counts = sampled_human.sum(axis=1)
+        fail_counts = len(human_pass) - pass_counts
+        with np.errstate(divide="ignore", invalid="ignore"):
+            tpr = (sampled_human & sampled_judge).sum(axis=1) / pass_counts
+            tnr = (~sampled_human & ~sampled_judge).sum(axis=1) / fail_counts
+            denominator = tpr + tnr - 1
+            usable[start:stop] = (pass_counts > 0) & (fail_counts > 0) & (denominator > 0)
+            estimates[start:stop] = np.clip((sampled_rate + tnr - 1) / denominator, 0.0, 1.0)
+    lower = float(np.percentile(np.where(usable, estimates, 0.0), 2.5))
+    upper = float(np.percentile(np.where(usable, estimates, 1.0), 97.5))
+
+    return {
+        "population_size": len(observed),
+        "observed_pass_rate": observed_pass_rate,
+        "corrected_pass_rate": estimate,
+        "confidence_interval_95": [lower, upper],
+        "judge_tpr": metrics["tpr"],
+        "judge_tnr": metrics["tnr"],
+        "test_examples": metrics["examples"],
+        "bootstrap_iterations": iterations,
+        "bootstrap_samples_uncorrectable": int(iterations - usable.sum()),
     }
 
 

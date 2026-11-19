@@ -10,12 +10,15 @@ from .promotion import build_evaluator_definition, validate_evaluator_definition
 from .schemas import (
     EvaluatorDefinition,
     JudgeValidationReport,
+    SuccessRateReport,
     dump_evaluator_definition,
     parse_evaluator_definition,
 )
 from .trace_review import normalize_trace_segments
 from .validation import (
     bootstrap_metric_intervals,
+    corrected_success_rate,
+    estimate_success_rate,
     normalize_binary_label,
     split_labeled_records,
     validate_evaluator_labels,
@@ -34,12 +37,15 @@ from .workspace import (
 __all__ = [
     "EvaluatorDefinition",
     "JudgeValidationReport",
+    "SuccessRateReport",
     "archive_review_workspace",
     "bootstrap_metric_intervals",
     "build_evaluator_definition",
     "build_review_bundle",
+    "corrected_success_rate",
     "dataframe_to_records",
     "dump_evaluator_definition",
+    "estimate_success_rate",
     "find_related_records",
     "initialize_review_workspace",
     "load_review_workspace",

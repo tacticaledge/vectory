@@ -35,7 +35,13 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
    A nonzero exit status means the evaluator must not gate releases. Use `--group-by` with product dimensions such as feature, scenario, and persona when those fields exist.
 
-6. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
+6. To report how often a validated evaluator's target actually passes on a random sample of new outputs, run:
+
+   `vectory estimate JUDGED --judge-column JUDGE_LABEL --test-set SPLITS/test.jsonl --human-column HUMAN_LABEL --split-manifest SPLITS/split_manifest.json --out ESTIMATE`
+
+   Report the corrected rate with its 95% interval, not the raw judge pass rate. To gate on the interval's lower bound, add `--min-pass-rate` together with `--evaluator EVALUATOR_JSON`; only a validated evaluator can gate, and every judged row must name that evaluator in its `evaluator_id` field.
+
+7. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
 
 ## Preserve these invariants
 

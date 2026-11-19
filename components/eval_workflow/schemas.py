@@ -151,6 +151,35 @@ class JudgeValidationReport(StrictModel):
     gate_passed: bool
     groups: list[GroupValidationReport] = Field(default_factory=list)
     gate_blockers: list[str] = Field(default_factory=list)
+    labels_sha256: str | None = None
+
+
+class SuccessRateEstimate(StrictModel):
+    population_size: int = Field(ge=1)
+    observed_pass_rate: float = Field(ge=0, le=1)
+    corrected_pass_rate: float = Field(ge=0, le=1)
+    confidence_interval_95: tuple[float, float]
+    judge_tpr: float = Field(ge=0, le=1)
+    judge_tnr: float = Field(ge=0, le=1)
+    test_examples: int = Field(ge=1)
+    bootstrap_iterations: int = Field(ge=1)
+    bootstrap_samples_uncorrectable: int = Field(ge=0)
+
+
+class SuccessRateReport(StrictModel):
+    schema_version: Literal["1.0"]
+    created_at: str = Field(min_length=1)
+    dataset: str = Field(min_length=1)
+    test_set: str = Field(min_length=1)
+    provenance: SplitProvenance
+    judge_label_column: str = Field(min_length=1)
+    evaluator: str | None = None
+    evaluator_id: str | None = None
+    dataset_evaluator_column: str | None = None
+    estimate: SuccessRateEstimate
+    minimum_pass_rate: float | None = Field(default=None, ge=0, le=1)
+    gate_passed: bool | None = None
+    gate_blockers: list[str] = Field(default_factory=list)
 
 
 class EvaluatorValidation(StrictModel):

@@ -15,11 +15,13 @@ from pathlib import Path
 
 from components.eval_workflow import (
     JudgeValidationReport,
+    SuccessRateReport,
     archive_review_workspace,
     bootstrap_metric_intervals,
     build_evaluator_definition,
     dataframe_to_records,
     dump_evaluator_definition,
+    estimate_success_rate,
     initialize_review_workspace,
     load_review_workspace,
     parse_evaluator_definition,
@@ -460,6 +462,7 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         "evaluator_label_column": args.judge_column,
         "metrics": metrics,
         "confidence_intervals_95": intervals,
+        "labels_sha256": _records_sha256(records, [args.human_column, args.judge_column]),
         "thresholds": {
             "minimum_tpr": effective_min_tpr,
             "minimum_tnr": effective_min_tnr,
@@ -507,6 +510,118 @@ def run_validate_judge(args: argparse.Namespace) -> int:
         f"TNR={metrics['tnr'] if metrics['tnr'] is not None else 'n/a'}, "
         f"balanced_accuracy={metrics['balanced_accuracy'] if metrics['balanced_accuracy'] is not None else 'n/a'}"
     )
+    print("Gate: PASS" if gate_passed else "Gate: FAIL")
+    return 0 if gate_passed else 1
+
+
+def run_estimate(args: argparse.Namespace) -> int:
+    if args.min_pass_rate is not None and not 0 <= args.min_pass_rate <= 1:
+        raise ValueError("Minimum pass rate must be between 0 and 1")
+    if args.min_pass_rate is not None and args.evaluator is None:
+        raise ValueError("--min-pass-rate requires --evaluator so only validated judges can gate")
+    if args.bootstrap_iterations <= 0:
+        raise ValueError("Bootstrap iterations must be positive")
+    test_judge_column = args.test_judge_column or args.judge_column
+    if args.human_column == test_judge_column:
+        raise ValueError("Human and judge label columns must be different")
+    records = _load_records(args.dataset)
+    if any(args.judge_column not in record for record in records):
+        raise ValueError(f"Missing judge label column in dataset: {args.judge_column}")
+    test_records = _load_records(args.test_set)
+    provenance = _verify_test_split_provenance(
+        args.test_set,
+        test_records,
+        args.split_manifest,
+        args.human_column,
+        test_judge_column,
+    )
+    missing = [
+        column
+        for column in (args.human_column, test_judge_column)
+        if any(column not in record for record in test_records)
+    ]
+    if missing:
+        raise ValueError(f"Missing required test label columns: {', '.join(missing)}")
+    human_labels = [record[args.human_column] for record in test_records]
+    test_judge_labels = [record[test_judge_column] for record in test_records]
+    estimate = estimate_success_rate(
+        [record[args.judge_column] for record in records],
+        human_labels,
+        test_judge_labels,
+        iterations=args.bootstrap_iterations,
+        seed=args.seed,
+    )
+
+    blockers = []
+    evaluator_id = None
+    if args.evaluator is not None:
+        evaluator = parse_evaluator_definition(
+            json.loads(args.evaluator.read_text(encoding="utf-8"))
+        )
+        evaluator_id = evaluator.evaluator_id
+        last_report = evaluator.validation.last_report
+        if evaluator.status != "validated" or not evaluator.validation.validated:
+            blockers.append(f"evaluator status is {evaluator.status}, not validated")
+        elif last_report is None or not last_report.gate_passed:
+            blockers.append("evaluator has no passing validation report")
+        elif last_report.labels_sha256 is None:
+            blockers.append("evaluator validation predates label fingerprints; re-run validate-judge")
+        elif last_report.labels_sha256 != _records_sha256(
+            test_records, [args.human_column, test_judge_column]
+        ):
+            blockers.append("test set labels do not match the evaluator's validation report")
+        # The validated metrics only describe this evaluator, so every judged row
+        # must name the evaluator that produced its label.
+        declared = {
+            str(record.get(args.dataset_evaluator_column) or "").strip() for record in records
+        }
+        if "" in declared:
+            blockers.append(
+                f"judged dataset does not record {args.dataset_evaluator_column!r} on every row, "
+                f"so its labels cannot be attributed to evaluator {evaluator_id}"
+            )
+        foreign = sorted(value for value in declared if value and value != evaluator_id)
+        if foreign:
+            blockers.append(
+                f"judged dataset labels were produced by evaluator {', '.join(foreign[:3])}, "
+                f"not {evaluator_id}"
+            )
+    interval = estimate["confidence_interval_95"]
+    gate_passed = None
+    if args.min_pass_rate is not None:
+        gate_passed = not blockers and interval[0] >= args.min_pass_rate
+    report = SuccessRateReport.model_validate(
+        {
+            "schema_version": "1.0",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "dataset": str(args.dataset),
+            "test_set": str(args.test_set),
+            "provenance": provenance,
+            "judge_label_column": args.judge_column,
+            "evaluator": str(args.evaluator) if args.evaluator else None,
+            "evaluator_id": evaluator_id,
+            "dataset_evaluator_column": (
+                args.dataset_evaluator_column if args.evaluator else None
+            ),
+            "estimate": estimate,
+            "minimum_pass_rate": args.min_pass_rate,
+            "gate_passed": gate_passed,
+            "gate_blockers": blockers,
+        }
+    )
+    if args.out:
+        _write_json(args.out, report.model_dump(mode="json", by_alias=True))
+        print(f"Wrote success-rate estimate: {args.out}")
+    print(
+        "Success rate: "
+        f"observed={estimate['observed_pass_rate']:.3f}, "
+        f"corrected={estimate['corrected_pass_rate']:.3f}, "
+        f"95% CI=[{interval[0]:.3f}, {interval[1]:.3f}]"
+    )
+    for blocker in blockers:
+        print(f"Blocker: {blocker}")
+    if gate_passed is None:
+        return 0
     print("Gate: PASS" if gate_passed else "Gate: FAIL")
     return 0 if gate_passed else 1
 
@@ -688,6 +803,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report metrics by dimensions such as feature, scenario, or persona.",
     )
     validate_parser.set_defaults(func=run_validate_judge)
+
+    estimate_parser = subparsers.add_parser(
+        "estimate",
+        help="Estimate the true pass rate of judged outputs, corrected for judge error.",
+    )
+    estimate_parser.add_argument("dataset", type=Path, help="JSON, JSONL, or CSV of outputs labeled by the judge.")
+    estimate_parser.add_argument("--judge-column", required=True, help="Evaluator Pass/Fail label column.")
+    estimate_parser.add_argument("--test-set", type=Path, required=True, help="Held-out human-labeled test set with judge labels.")
+    estimate_parser.add_argument("--human-column", required=True, help="Trusted human Pass/Fail label column in the test set.")
+    estimate_parser.add_argument(
+        "--test-judge-column",
+        help="Evaluator label column in the test set. Default: the --judge-column name.",
+    )
+    estimate_parser.add_argument(
+        "--split-manifest",
+        type=Path,
+        required=True,
+        help="Manifest used to verify that the test set is the untouched held-out partition.",
+    )
+    estimate_parser.add_argument(
+        "--min-pass-rate",
+        type=float,
+        help="Fail unless the lower bound of the 95%% interval reaches this rate. Requires --evaluator.",
+    )
+    estimate_parser.add_argument(
+        "--evaluator",
+        type=Path,
+        help="Evaluator JSON that must be validated on this test set before the estimate can gate.",
+    )
+    estimate_parser.add_argument(
+        "--dataset-evaluator-column",
+        default="evaluator_id",
+        help=(
+            "Dataset field naming the evaluator that produced each judge label. "
+            "Checked against --evaluator. Default: evaluator_id."
+        ),
+    )
+    estimate_parser.add_argument("--bootstrap-iterations", type=int, default=20000)
+    estimate_parser.add_argument("--seed", type=int, default=42)
+    estimate_parser.add_argument("--out", type=Path, help="Optional JSON estimate report path.")
+    estimate_parser.set_defaults(func=run_estimate)
 
     doctor_parser = subparsers.add_parser("doctor", help="Check local Vectory installation health.")
     doctor_parser.set_defaults(func=doctor)
