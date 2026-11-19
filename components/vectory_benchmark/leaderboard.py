@@ -7,6 +7,7 @@ from statistics import mean
 
 import pandas as pd
 
+from components.vectory_benchmark.reliability import reliability_summary
 from components.vectory_benchmark.schemas import LeaderboardEntry, RunScore
 
 
@@ -47,6 +48,7 @@ def build_leaderboard(scores: list[RunScore]) -> pd.DataFrame:
             else float(score.facts.get("agent_control_index", score.dimensions["agent_control"].score))
             for score in group
         )
+        reliability = reliability_summary(group)
         entries.append(
             LeaderboardEntry(
                 rank=0,
@@ -57,6 +59,10 @@ def build_leaderboard(scores: list[RunScore]) -> pd.DataFrame:
                 vectory_score=round(vectory_score, 4),
                 pass_at_1=round(pass_at_1, 4),
                 robust_pass_at_5=round(_robust_pass_at_5(group), 4),
+                reliability_k=reliability["reliability_k"],
+                pass_at_k=reliability["pass_at_k"],
+                pass_hat_k=reliability["pass_hat_k"],
+                reliability_tasks=reliability["reliability_tasks"],
                 productive_work_ratio=round(productive_work_ratio, 4),
                 pathology_risk=round(pathology_risk, 4),
                 agent_control_index=round(agent_control_index, 4),

@@ -20,7 +20,13 @@ from components.ui import (
     inject_custom_css,
     section_header,
 )
-from components.vectory_benchmark import build_leaderboard, load_suite, score_submission
+from components.vectory_benchmark import (
+    build_leaderboard,
+    load_suite,
+    reliability_summary,
+    score_submission,
+    task_reliability_rows,
+)
 from components.vectory_benchmark.reports import checkpoint_rows, claim_evidence_rows
 from components.vectory_benchmark.trace_parser import load_submission_payload
 
@@ -591,6 +597,24 @@ with tab3:
         with col4:
             _stat_card("Control Index", f"{score_df['agent_control'].mean():.3f}", "Scope discipline and boundedness.")
 
+        reliability = reliability_summary(scores)
+        reliability_df = pd.DataFrame(task_reliability_rows(scores))
+        if reliability["reliability_k"] is not None:
+            k = reliability["reliability_k"]
+            rel_col1, rel_col2 = st.columns(2)
+            with rel_col1:
+                _stat_card(
+                    f"Pass@{k}",
+                    f"{reliability['pass_at_k']:.1%}",
+                    f"Unbiased chance of at least one success in {k} tries.",
+                )
+            with rel_col2:
+                _stat_card(
+                    f"Pass^{k}",
+                    f"{reliability['pass_hat_k']:.1%}",
+                    f"Unbiased chance of passing every one of {k} tries.",
+                )
+
         dimension_cols = [
             "task_success",
             "reality_sampling",
@@ -605,16 +629,25 @@ with tab3:
         report_left, report_right = st.columns([0.95, 1.05], gap="large")
         with report_left:
             st.markdown("### Leaderboard")
+            leaderboard_display = leaderboard_df.dropna(axis=1, how="all")
+            leaderboard_formats = {
+                "vectory_score": "{:.3f}",
+                "pass_at_1": "{:.1%}",
+                "robust_pass_at_5": "{:.1%}",
+                "pass_at_k": "{:.1%}",
+                "pass_hat_k": "{:.1%}",
+                "productive_work_ratio": "{:.3f}",
+                "pathology_risk": "{:.3f}",
+                "agent_control_index": "{:.3f}",
+            }
             st.dataframe(
-                leaderboard_df.style.format(
+                leaderboard_display.style.format(
                     {
-                        "vectory_score": "{:.3f}",
-                        "pass_at_1": "{:.1%}",
-                        "robust_pass_at_5": "{:.1%}",
-                        "productive_work_ratio": "{:.3f}",
-                        "pathology_risk": "{:.3f}",
-                        "agent_control_index": "{:.3f}",
-                    }
+                        column: fmt
+                        for column, fmt in leaderboard_formats.items()
+                        if column in leaderboard_display.columns
+                    },
+                    na_rep="n/a",
                 ),
                 width="stretch",
                 hide_index=True,
@@ -650,6 +683,23 @@ with tab3:
                 score_df.style.format({"vectory_score": "{:.3f}", "pathology_risk": "{:.3f}"}),
                 width="stretch",
                 height=360,
+                hide_index=True,
+            )
+
+        with st.expander("Task reliability", expanded=False):
+            if reliability["reliability_k"] is None:
+                st.info("Submit repeated runs of the same task to estimate pass@k and pass^k.")
+            else:
+                st.caption(
+                    f"Unbiased pass@{reliability['reliability_k']} and pass^{reliability['reliability_k']} "
+                    "per task, from the trials and successes submitted for each task."
+                )
+            st.dataframe(
+                reliability_df.style.format(
+                    {"pass_at_k": "{:.1%}", "pass_hat_k": "{:.1%}"}, na_rep="n/a"
+                ),
+                width="stretch",
+                height=260,
                 hide_index=True,
             )
 

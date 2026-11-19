@@ -115,6 +115,8 @@ Vectory Benchmark reports both an overall score and operational metrics:
 - `vectory_score`: weighted reliability score.
 - `pass_at_1`: fraction of submitted scored runs that pass.
 - `robust_pass_at_5`: fraction of tasks solved at least once within five runs.
+- `pass_at_k`: unbiased `pass@k`, the chance that at least one of `k` sampled runs passes.
+- `pass_hat_k`: unbiased `pass^k`, the chance that every one of `k` sampled runs passes.
 - `productive_work_ratio`: trace productivity signal derived from the scored dimensions.
 - `pathology_risk`: aggregate penalty from detected pathologies.
 - `agent_control_index`: boundedness and safety/control signal.
@@ -122,6 +124,29 @@ Vectory Benchmark reports both an overall score and operational metrics:
 - `retrieval_fitness`: retrieval and tool-use discipline signal.
 - `turn_efficiency`: budget and turn-cliff discipline.
 - `proof_grounding`: proof obligation closure, claim support, and checker-result quality.
+
+## Repeated Runs: pass@k and pass^k
+
+Submit several runs of the same `task_id` to measure reliability instead of a single lucky attempt. For a task with `n` trials and `c` successes, Vectory Benchmark reports two unbiased estimators:
+
+- `pass@k = 1 - C(n-c, k) / C(n, k)`: at least one success in `k` sampled runs.
+- `pass^k = C(c, k) / C(n, k)`: success on every one of `k` sampled runs.
+
+`pass@k` rewards exploration, while `pass^k` is the stricter measure most production workflows need, because an agent that only works four times out of five still fails in production. With `n=8`, `c=6`, and `k=4`, `pass@4` is `1.0` while `pass^4` is `15/70 = 0.2143`.
+
+`k` defaults to the largest value every repeated-run task supports, which is the smallest trial count among tasks with at least two runs. Tasks with fewer trials than `k` report empty `pass@k` and `pass^k` values and are excluded from the leaderboard averages; `reliability_tasks` reports how many tasks contributed. Submissions without repeated runs leave `reliability_k`, `pass_at_k`, and `pass_hat_k` empty, and the long-standing `pass_at_1` and `robust_pass_at_5` columns are unchanged.
+
+Use the estimators directly on any trial counts:
+
+```python
+from components.vectory_benchmark import pass_at_k, pass_hat_k, reliability_summary, task_reliability_rows
+
+pass_at_k(8, 6, 4)   # 1.0
+pass_hat_k(8, 6, 4)  # 0.2143
+
+reliability_summary(scores)     # overall k, pass@k, pass^k, contributing task count
+task_reliability_rows(scores)   # per-task trials, successes, pass@k, pass^k
+```
 
 ## Pathology Taxonomy
 
@@ -263,7 +288,8 @@ The bundle contains:
 
 - `index.html`: standalone report summary for sharing or attaching to release reviews.
 - `scores.json` and `scores.csv`: per-run score dimensions.
-- `leaderboard.json`: aggregate leaderboard rows.
+- `leaderboard.json`: aggregate leaderboard rows, including `pass_at_k` and `pass_hat_k`.
+- `task_reliability.json` and `.csv`: per-task trials, successes, `pass@k`, and `pass^k`.
 - `pathologies.json` and `pathologies.csv`: detected failure modes with evidence and recommendations.
 - `claim_evidence_table.json` and `.csv`: claim-to-evidence and claim-to-obligation mapping.
 - `checkpoints.json` and `.csv`: submitted checkpoint events for progress curves.
@@ -347,6 +373,7 @@ components/vectory_benchmark/
   pathology.py
   scoring.py
   leaderboard.py
+  reliability.py
   suite.py
   formal_runtime.py
 

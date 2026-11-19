@@ -359,6 +359,10 @@ class LeaderboardEntry(BaseModel):
     vectory_score: float
     pass_at_1: float
     robust_pass_at_5: float
+    reliability_k: int | None = None
+    pass_at_k: float | None = None
+    pass_hat_k: float | None = None
+    reliability_tasks: int | None = None
     productive_work_ratio: float
     pathology_risk: float
     agent_control_index: float

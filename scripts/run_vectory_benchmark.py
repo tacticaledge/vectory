@@ -14,7 +14,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 try:
-    from components.vectory_benchmark import build_leaderboard, load_suite, score_submission
+    from components.vectory_benchmark import (
+        build_leaderboard,
+        load_suite,
+        reliability_summary,
+        score_submission,
+    )
     from components.vectory_benchmark.formal_runtime import run_trusted_formal_checkers
     from components.vectory_benchmark.reports import (
         evaluate_gate,
@@ -52,6 +57,15 @@ def _print_summary(scores, leaderboard) -> None:
     print(f"Runs scored: {total}")
     print(f"Pass@1: {passed / total:.1%}" if total else "Pass@1: n/a")
     print(f"Mean Vectory Score: {mean_score:.3f}")
+
+    reliability = reliability_summary(scores)
+    if reliability["reliability_k"] is not None:
+        k = reliability["reliability_k"]
+        print(
+            f"Pass@{k}: {reliability['pass_at_k']:.1%} "
+            f"(unbiased, {reliability['reliability_tasks']} repeated task(s))"
+        )
+        print(f"Pass^{k}: {reliability['pass_hat_k']:.1%} (passes every one of {k} tries)")
 
     if not leaderboard.empty:
         top = leaderboard.iloc[0]

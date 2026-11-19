@@ -3,7 +3,9 @@ Tests for VectoryBenchmark scoring, pathologies, and aggregation.
 """
 
 import csv
+import json
 from pathlib import Path
+from statistics import mean
 
 import pytest
 
@@ -12,6 +14,12 @@ from components.vectory_benchmark.pathology import detect_pathologies
 from components.vectory_benchmark.reports import (
     evaluate_gate,
     write_report_bundle,
+)
+from components.vectory_benchmark.reliability import (
+    pass_at_k,
+    pass_hat_k,
+    reliability_summary,
+    task_reliability_rows,
 )
 from components.vectory_benchmark.schemas import AgentRun, BenchmarkTask, EventType, Severity, TaskChecks, TaskLimits
 from components.vectory_benchmark.scoring import score_run, score_submission
@@ -158,6 +166,147 @@ def test_score_submission_and_leaderboard():
     assert leaderboard.iloc[0]["agent"] == "ExampleAgent"
     assert leaderboard.iloc[0]["runs"] == 1
     assert "agent_control_index" in leaderboard.columns
+
+
+def _repeat_task(task_id: str = "coding.repeat") -> BenchmarkTask:
+    return BenchmarkTask(
+        task_id=task_id,
+        title="Repeat Test",
+        domain="coding",
+        intent="Fix code after inspection.",
+        setup="Inspect, edit, verify.",
+        success_criteria=["fixed"],
+        checks=TaskChecks(
+            expected_answer_keywords=["fix"],
+            required_event_types=[EventType.FILE_EDIT, EventType.VERIFICATION],
+            reality_sampling_tools=["read_file"],
+            min_reality_events=1,
+            requires_verification=True,
+        ),
+        limits=TaskLimits(max_events=20, max_tool_calls=10, turn_cliff_events=12),
+    )
+
+
+def _repeated_scores(pass_flags: list[bool], task_id: str = "coding.repeat"):
+    """Score one run per flag so the task has repeated trials with known outcomes."""
+
+    task = _repeat_task(task_id)
+    scores = []
+    for index, should_pass in enumerate(pass_flags):
+        if should_pass:
+            run = {
+                "agent": "RepeatAgent",
+                "model": "local",
+                "task_id": task_id,
+                "run_id": f"{task_id}.run_{index}",
+                "status": "completed",
+                "final_answer": "Applied the fix and verified the test.",
+                "declared_success": True,
+                "events": [
+                    {"type": "tool_call", "name": "read_file", "path": "src/parser.py", "success": True},
+                    {"type": "file_edit", "path": "src/parser.py", "success": True},
+                    {"type": "verification", "name": "pytest", "success": True},
+                    {"type": "final", "content": "done"},
+                ],
+            }
+        else:
+            run = {
+                "agent": "RepeatAgent",
+                "model": "local",
+                "task_id": task_id,
+                "run_id": f"{task_id}.run_{index}",
+                "status": "failed",
+                "final_answer": "",
+                "events": [{"type": "error", "content": "crashed"}],
+            }
+        scores.append(score_run(task, run))
+    return scores
+
+
+def test_pass_at_k_and_pass_hat_k_match_hand_computed_cases():
+    # n=8, c=6, k=4: C(2,4)=0 so pass@4 is certain, and pass^4 is C(6,4)/C(8,4)=15/70.
+    assert pass_at_k(8, 6, 4) == pytest.approx(1.0)
+    assert pass_hat_k(8, 6, 4) == pytest.approx(15 / 70)
+    # n=5, c=2, k=2: pass@2 = 1 - C(3,2)/C(5,2), pass^2 = C(2,2)/C(5,2).
+    assert pass_at_k(5, 2, 2) == pytest.approx(0.7)
+    assert pass_hat_k(5, 2, 2) == pytest.approx(0.1)
+    # k=1 collapses to the observed success rate for both estimators.
+    assert pass_at_k(4, 3, 1) == pytest.approx(0.75)
+    assert pass_hat_k(4, 3, 1) == pytest.approx(0.75)
+    assert pass_at_k(3, 0, 2) == pytest.approx(0.0)
+    assert pass_hat_k(3, 3, 3) == pytest.approx(1.0)
+
+
+def test_pass_at_k_rejects_impossible_inputs():
+    with pytest.raises(ValueError):
+        pass_at_k(3, 4, 2)
+    with pytest.raises(ValueError):
+        pass_at_k(3, 1, 4)
+    with pytest.raises(ValueError):
+        pass_hat_k(0, 0, 1)
+    with pytest.raises(ValueError):
+        pass_hat_k(3, 1, 0)
+
+
+def test_leaderboard_reports_pass_at_k_for_repeated_runs():
+    scores = _repeated_scores([True, True, False, True])
+
+    assert [score.passed for score in scores] == [True, True, False, True]
+
+    rows = task_reliability_rows(scores)
+    leaderboard = build_leaderboard(scores)
+    entry = leaderboard.iloc[0]
+
+    assert rows == [
+        {
+            "agent": "RepeatAgent",
+            "model": "local",
+            "task_id": "coding.repeat",
+            "domain": "coding",
+            "trials": 4,
+            "successes": 3,
+            "k": 4,
+            "pass_at_k": 1.0,
+            "pass_hat_k": 0.0,
+        }
+    ]
+    assert entry["reliability_k"] == 4
+    assert entry["pass_at_k"] == pytest.approx(1.0)
+    assert entry["pass_hat_k"] == pytest.approx(0.0)
+    assert entry["reliability_tasks"] == 1
+    assert entry["robust_pass_at_5"] == pytest.approx(1.0)
+    assert entry["pass_at_1"] == pytest.approx(0.75)
+
+
+def test_reliability_summary_uses_k_supported_by_every_repeated_task():
+    scores = _repeated_scores([True, False, False], task_id="coding.repeat_a")
+    scores += _repeated_scores([True, True], task_id="coding.repeat_b")
+    scores += _repeated_scores([False], task_id="coding.repeat_single")
+
+    summary = reliability_summary(scores)
+    rows = {row["task_id"]: row for row in task_reliability_rows(scores)}
+
+    assert summary["reliability_k"] == 2
+    assert summary["reliability_tasks"] == 2
+    # pass@2 is 1 - C(2,2)/C(3,2) for the 1-of-3 task and 1.0 for the 2-of-2 task.
+    assert summary["pass_at_k"] == pytest.approx(mean([2 / 3, 1.0]), abs=1e-4)
+    assert summary["pass_hat_k"] == pytest.approx(mean([0.0, 1.0]), abs=1e-4)
+    assert rows["coding.repeat_single"]["k"] is None
+    assert rows["coding.repeat_single"]["pass_at_k"] is None
+    assert reliability_summary(scores, k=3)["reliability_tasks"] == 1
+
+
+def test_leaderboard_keeps_robust_pass_at_5_without_repeated_runs():
+    scores = _repeated_scores([True])
+
+    leaderboard = build_leaderboard(scores)
+    entry = leaderboard.iloc[0]
+
+    assert entry["robust_pass_at_5"] == pytest.approx(1.0)
+    assert entry["reliability_k"] is None
+    assert entry["pass_at_k"] is None
+    assert entry["pass_hat_k"] is None
+    assert reliability_summary(scores)["reliability_k"] is None
 
 
 def test_trace_parser_accepts_jsonl_and_aliases():
@@ -376,6 +525,33 @@ def test_report_bundle_writes_inspectable_artifacts(tmp_path):
     assert "proof_grounding.policy_guardrail.001" in (tmp_path / "index.html").read_text()
     assert "claim.policy.valid" in (tmp_path / "claim_evidence_table.csv").read_text()
     assert "proof-grounding-checkpoint" in (tmp_path / "checkpoints.csv").read_text()
+
+
+def test_report_bundle_includes_task_reliability(tmp_path):
+    suite = load_suite()
+    scores = _repeated_scores([True, False, True])
+    leaderboard = build_leaderboard(scores)
+
+    write_report_bundle(
+        tmp_path,
+        suite=suite,
+        tasks=suite.tasks,
+        runs=[],
+        scores=scores,
+        leaderboard_rows=leaderboard.to_dict(orient="records"),
+    )
+
+    reliability_rows = json.loads((tmp_path / "task_reliability.json").read_text())
+    report = (tmp_path / "index.html").read_text()
+
+    assert reliability_rows[0]["task_id"] == "coding.repeat"
+    assert reliability_rows[0]["trials"] == 3
+    assert reliability_rows[0]["successes"] == 2
+    assert reliability_rows[0]["pass_at_k"] == pytest.approx(1.0)
+    assert reliability_rows[0]["pass_hat_k"] == pytest.approx(0.0)
+    assert "pass_hat_k" in (tmp_path / "task_reliability.csv").read_text()
+    assert "Task Reliability" in report
+    assert "Pass^3" in report
 
 
 def test_report_bundle_neutralizes_csv_formula_cells(tmp_path):
