@@ -15,6 +15,7 @@ from pathlib import Path
 
 from components.eval_workflow import (
     JudgeValidationReport,
+    SuccessRateReport,
     archive_review_workspace,
     bootstrap_metric_intervals,
     build_evaluator_definition,
@@ -515,6 +516,10 @@ def run_validate_judge(args: argparse.Namespace) -> int:
 def run_estimate(args: argparse.Namespace) -> int:
     if args.min_pass_rate is not None and not 0 <= args.min_pass_rate <= 1:
         raise ValueError("Minimum pass rate must be between 0 and 1")
+    if args.min_pass_rate is not None and args.evaluator is None:
+        raise ValueError("--min-pass-rate requires --evaluator so only validated judges can gate")
+    if args.bootstrap_iterations <= 0:
+        raise ValueError("Bootstrap iterations must be positive")
     test_judge_column = args.test_judge_column or args.judge_column
     if args.human_column == test_judge_column:
         raise ValueError("Human and judge label columns must be different")
@@ -536,40 +541,60 @@ def run_estimate(args: argparse.Namespace) -> int:
     ]
     if missing:
         raise ValueError(f"Missing required test label columns: {', '.join(missing)}")
+    human_labels = [record[args.human_column] for record in test_records]
+    test_judge_labels = [record[test_judge_column] for record in test_records]
     estimate = estimate_success_rate(
         [record[args.judge_column] for record in records],
-        [record[args.human_column] for record in test_records],
-        [record[test_judge_column] for record in test_records],
+        human_labels,
+        test_judge_labels,
         iterations=args.bootstrap_iterations,
         seed=args.seed,
     )
+
+    blockers = []
+    if args.evaluator is not None:
+        evaluator = parse_evaluator_definition(
+            json.loads(args.evaluator.read_text(encoding="utf-8"))
+        )
+        last_report = evaluator.validation.last_report
+        if evaluator.status != "validated" or not evaluator.validation.validated:
+            blockers.append(f"evaluator status is {evaluator.status}, not validated")
+        elif last_report is None or not last_report.gate_passed:
+            blockers.append("evaluator has no passing validation report")
+        elif last_report.metrics.confusion_matrix.model_dump() != (
+            validate_evaluator_labels(human_labels, test_judge_labels)["confusion_matrix"]
+        ):
+            blockers.append("test set labels do not match the evaluator's validation report")
     interval = estimate["confidence_interval_95"]
     gate_passed = None
     if args.min_pass_rate is not None:
-        gate_passed = interval is not None and interval[0] >= args.min_pass_rate
-    report = {
-        "schema_version": "1.0",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "dataset": str(args.dataset),
-        "test_set": str(args.test_set),
-        "provenance": provenance,
-        "judge_label_column": args.judge_column,
-        "estimate": estimate,
-        "minimum_pass_rate": args.min_pass_rate,
-        "gate_passed": gate_passed,
-    }
-    if args.out:
-        _write_json(args.out, report)
-        print(f"Wrote success-rate estimate: {args.out}")
-    interval_text = (
-        f"[{interval[0]:.3f}, {interval[1]:.3f}]" if interval is not None else "n/a"
+        gate_passed = not blockers and interval[0] >= args.min_pass_rate
+    report = SuccessRateReport.model_validate(
+        {
+            "schema_version": "1.0",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "dataset": str(args.dataset),
+            "test_set": str(args.test_set),
+            "provenance": provenance,
+            "judge_label_column": args.judge_column,
+            "evaluator": str(args.evaluator) if args.evaluator else None,
+            "estimate": estimate,
+            "minimum_pass_rate": args.min_pass_rate,
+            "gate_passed": gate_passed,
+            "gate_blockers": blockers,
+        }
     )
+    if args.out:
+        _write_json(args.out, report.model_dump(mode="json", by_alias=True))
+        print(f"Wrote success-rate estimate: {args.out}")
     print(
         "Success rate: "
         f"observed={estimate['observed_pass_rate']:.3f}, "
         f"corrected={estimate['corrected_pass_rate']:.3f}, "
-        f"95% CI={interval_text}"
+        f"95% CI=[{interval[0]:.3f}, {interval[1]:.3f}]"
     )
+    for blocker in blockers:
+        print(f"Blocker: {blocker}")
     if gate_passed is None:
         return 0
     print("Gate: PASS" if gate_passed else "Gate: FAIL")
@@ -775,7 +800,12 @@ def build_parser() -> argparse.ArgumentParser:
     estimate_parser.add_argument(
         "--min-pass-rate",
         type=float,
-        help="Fail unless the lower bound of the 95%% interval reaches this rate.",
+        help="Fail unless the lower bound of the 95%% interval reaches this rate. Requires --evaluator.",
+    )
+    estimate_parser.add_argument(
+        "--evaluator",
+        type=Path,
+        help="Evaluator JSON that must be validated on this test set before the estimate can gate.",
     )
     estimate_parser.add_argument("--bootstrap-iterations", type=int, default=20000)
     estimate_parser.add_argument("--seed", type=int, default=42)

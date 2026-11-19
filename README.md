@@ -67,6 +67,7 @@ vectory estimate production-judged.jsonl \
   --test-set judge-splits/test.jsonl \
   --human-column human_label \
   --split-manifest judge-splits/split_manifest.json \
+  --evaluator eval-review/evaluators/failure-unsupported-claim.json \
   --min-pass-rate 0.90
 ```
 

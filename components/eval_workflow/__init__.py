@@ -10,6 +10,7 @@ from .promotion import build_evaluator_definition, validate_evaluator_definition
 from .schemas import (
     EvaluatorDefinition,
     JudgeValidationReport,
+    SuccessRateReport,
     dump_evaluator_definition,
     parse_evaluator_definition,
 )
@@ -36,6 +37,7 @@ from .workspace import (
 __all__ = [
     "EvaluatorDefinition",
     "JudgeValidationReport",
+    "SuccessRateReport",
     "archive_review_workspace",
     "bootstrap_metric_intervals",
     "build_evaluator_definition",

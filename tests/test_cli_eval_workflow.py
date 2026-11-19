@@ -151,7 +151,7 @@ def test_split_and_validate_judge_gate(tmp_path):
     assert "judge_label" not in report_payload["provenance"]["verified_fields"]
 
 
-def test_estimate_gates_on_interval_lower_bound(tmp_path, capsys):
+def _validated_judge_fixture(tmp_path):
     labels = tmp_path / "labels.jsonl"
     write_jsonl(
         labels,
@@ -178,6 +178,22 @@ def test_estimate_gates_on_interval_lower_bound(tmp_path, capsys):
     for record in test_records:
         record["judge_label"] = record["human_label"]
     write_jsonl(test_path, test_records)
+    evaluator_path = tmp_path / "evaluator.json"
+    evaluator_path.write_text(
+        json.dumps(
+            build_evaluator_definition(
+                "Unsupported claim",
+                {"description": "The output contains an unsupported claim."},
+                source_annotation_ids=["pass", "fail"],
+                expert_examples=[
+                    {"input": {"output": "Grounded"}, "critique": "Grounded answer.", "result": "Pass"},
+                    {"input": {"output": "Invented"}, "critique": "Unsupported claim.", "result": "Fail"},
+                ],
+                errors_reviewed=True,
+            )
+        ),
+        encoding="utf-8",
+    )
     production = tmp_path / "production.jsonl"
     write_jsonl(
         production,
@@ -199,17 +215,73 @@ def test_estimate_gates_on_interval_lower_bound(tmp_path, capsys):
         "--bootstrap-iterations",
         "200",
     ]
+    validate_arguments = [
+        "validate-judge",
+        str(test_path),
+        "--human-column",
+        "human_label",
+        "--judge-column",
+        "judge_label",
+        "--split-manifest",
+        str(split_dir / "split_manifest.json"),
+        "--evaluator",
+        str(evaluator_path),
+        "--bootstrap-iterations",
+        "50",
+    ]
+    return arguments, validate_arguments, evaluator_path, test_path
+
+
+def test_estimate_gates_on_interval_lower_bound(tmp_path, capsys):
+    arguments, validate_arguments, evaluator_path, _ = _validated_judge_fixture(tmp_path)
+    assert main(validate_arguments) == 0
     out = tmp_path / "estimate.json"
 
-    assert main([*arguments, "--min-pass-rate", "0.85", "--out", str(out)]) == 0
+    assert main(
+        [*arguments, "--evaluator", str(evaluator_path), "--min-pass-rate", "0.85", "--out", str(out)]
+    ) == 0
     report = json.loads(out.read_text(encoding="utf-8"))
     assert report["estimate"]["observed_pass_rate"] == 0.9
     assert report["estimate"]["corrected_pass_rate"] == pytest.approx(0.9)
     assert report["gate_passed"] is True
+    assert report["gate_blockers"] == []
     assert report["provenance"]["verified"] is True
     assert "corrected=0.900" in capsys.readouterr().out
 
-    assert main([*arguments, "--min-pass-rate", "0.95"]) == 1
+    assert main([*arguments, "--evaluator", str(evaluator_path), "--min-pass-rate", "0.95"]) == 1
+    assert main(arguments) == 0
+
+
+def test_estimate_gate_requires_validated_evaluator(tmp_path):
+    arguments, _, evaluator_path, _ = _validated_judge_fixture(tmp_path)
+    out = tmp_path / "estimate.json"
+
+    with pytest.raises(SystemExit):
+        main([*arguments, "--min-pass-rate", "0.5"])
+    assert main(
+        [*arguments, "--evaluator", str(evaluator_path), "--min-pass-rate", "0.5", "--out", str(out)]
+    ) == 1
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["gate_passed"] is False
+    assert report["gate_blockers"] == ["evaluator status is draft_unvalidated, not validated"]
+
+
+def test_estimate_gate_rejects_labels_that_differ_from_validation(tmp_path):
+    arguments, validate_arguments, evaluator_path, test_path = _validated_judge_fixture(tmp_path)
+    assert main(validate_arguments) == 0
+    test_records = [json.loads(line) for line in test_path.read_text().splitlines()]
+    first_fail = next(record for record in test_records if record["human_label"] == "Fail")
+    first_fail["judge_label"] = "Pass"
+    write_jsonl(test_path, test_records)
+    out = tmp_path / "estimate.json"
+
+    assert main(
+        [*arguments, "--evaluator", str(evaluator_path), "--min-pass-rate", "0.5", "--out", str(out)]
+    ) == 1
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["gate_blockers"] == [
+        "test set labels do not match the evaluator's validation report"
+    ]
 
 
 def test_validate_judge_fails_ci_when_one_class_is_missed(tmp_path):

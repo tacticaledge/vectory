@@ -39,7 +39,7 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
    `vectory estimate JUDGED --judge-column JUDGE_LABEL --test-set SPLITS/test.jsonl --human-column HUMAN_LABEL --split-manifest SPLITS/split_manifest.json --out ESTIMATE`
 
-   Report the corrected rate with its 95% interval, not the raw judge pass rate. Add `--min-pass-rate` to gate on the interval's lower bound.
+   Report the corrected rate with its 95% interval, not the raw judge pass rate. To gate on the interval's lower bound, add `--min-pass-rate` together with `--evaluator EVALUATOR_JSON`; only a validated evaluator can gate.
 
 7. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
 

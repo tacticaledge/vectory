@@ -237,7 +237,39 @@ def test_estimate_success_rate_reports_raw_corrected_and_interval():
     assert estimate["corrected_pass_rate"] == pytest.approx(0.73 / 0.75)
     low, high = estimate["confidence_interval_95"]
     assert 0 <= low < estimate["corrected_pass_rate"] <= high <= 1
-    assert estimate["bootstrap_samples_used"] == 2000
+    assert estimate["bootstrap_samples_uncorrectable"] == 0
+
+
+def test_uncorrectable_resamples_widen_the_interval():
+    # A judge barely above chance: many resamples leave TPR + TNR <= 1.
+    human = ["Pass"] * 10 + ["Fail"] * 10
+    judge = ["Pass"] * 6 + ["Fail"] * 4 + ["Fail"] * 5 + ["Pass"] * 5
+    population = ["Pass"] * 70 + ["Fail"] * 30
+
+    estimate = estimate_success_rate(population, human, judge, iterations=2000, seed=3)
+
+    assert estimate["bootstrap_samples_uncorrectable"] > 50
+    assert estimate["confidence_interval_95"] == [0.0, 1.0]
+
+
+def test_estimate_bootstrap_is_chunked_and_deterministic(monkeypatch):
+    from components.eval_workflow import validation
+
+    human = ["Pass"] * 40 + ["Fail"] * 40
+    judge = ["Pass"] * 36 + ["Fail"] * 4 + ["Fail"] * 34 + ["Pass"] * 6
+    population = ["Pass"] * 88 + ["Fail"] * 12
+    whole = estimate_success_rate(population, human, judge, iterations=500, seed=11)
+    monkeypatch.setattr(validation, "_BOOTSTRAP_CELLS_PER_CHUNK", 80 * 7)
+    chunked = estimate_success_rate(population, human, judge, iterations=500, seed=11)
+
+    assert chunked["bootstrap_iterations"] == 500
+    assert 0 <= chunked["confidence_interval_95"][0] <= chunked["confidence_interval_95"][1] <= 1
+    assert whole["corrected_pass_rate"] == chunked["corrected_pass_rate"]
+
+
+def test_estimate_requires_positive_bootstrap_iterations():
+    with pytest.raises(ValueError, match="positive"):
+        estimate_success_rate(["Pass"], ["Pass", "Fail"], ["Pass", "Fail"], iterations=0)
 
 
 def test_estimate_success_rate_requires_both_test_classes():

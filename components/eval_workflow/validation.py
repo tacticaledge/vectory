@@ -10,6 +10,7 @@ import numpy as np
 
 _PASS_LABELS = {"pass", "passed", "true", "1", "yes", "good", "positive"}
 _FAIL_LABELS = {"fail", "failed", "false", "0", "no", "bad", "negative"}
+_BOOTSTRAP_CELLS_PER_CHUNK = 2_000_000
 
 
 def normalize_binary_label(value: Any) -> str:
@@ -146,7 +147,12 @@ def estimate_success_rate(
     ``human_labels`` and ``evaluator_labels`` are the held-out test pairs used to
     measure judge accuracy. The 95% interval bootstraps the test pairs and holds
     the observed pass rate fixed, so it reflects uncertainty in TPR and TNR.
+    Resamples that lack a class or leave the judge at or below chance cannot be
+    corrected; they count as 0 for the lower bound and 1 for the upper bound, so
+    they widen the interval instead of being dropped.
     """
+    if iterations <= 0:
+        raise ValueError("Bootstrap iterations must be positive")
     if not judge_labels:
         raise ValueError("At least one judge label is required")
     observed = np.array([normalize_binary_label(value) for value in judge_labels])
@@ -156,13 +162,16 @@ def estimate_success_rate(
         raise ValueError("Test labels must include both Pass and Fail examples")
     estimate = corrected_success_rate(observed_pass_rate, metrics["tpr"], metrics["tnr"])
 
-    interval = None
-    samples_used = 0
-    if iterations > 0:
-        human_pass = np.array([normalize_binary_label(value) == "Pass" for value in human_labels])
-        judge_pass = np.array([normalize_binary_label(value) == "Pass" for value in evaluator_labels])
-        rng = np.random.default_rng(seed)
-        indices = rng.integers(0, len(human_pass), size=(iterations, len(human_pass)))
+    human_pass = np.array([normalize_binary_label(value) == "Pass" for value in human_labels])
+    judge_pass = np.array([normalize_binary_label(value) == "Pass" for value in evaluator_labels])
+    rng = np.random.default_rng(seed)
+    estimates = np.empty(iterations)
+    usable = np.empty(iterations, dtype=bool)
+    # Resample in bounded chunks so memory stays flat for large test sets.
+    chunk_size = max(1, _BOOTSTRAP_CELLS_PER_CHUNK // len(human_pass))
+    for start in range(0, iterations, chunk_size):
+        stop = min(start + chunk_size, iterations)
+        indices = rng.integers(0, len(human_pass), size=(stop - start, len(human_pass)))
         sampled_human = human_pass[indices]
         sampled_judge = judge_pass[indices]
         pass_counts = sampled_human.sum(axis=1)
@@ -171,22 +180,21 @@ def estimate_success_rate(
             tpr = (sampled_human & sampled_judge).sum(axis=1) / pass_counts
             tnr = (~sampled_human & ~sampled_judge).sum(axis=1) / fail_counts
             denominator = tpr + tnr - 1
-            usable = (pass_counts > 0) & (fail_counts > 0) & (denominator > 0)
-            estimates = np.clip((observed_pass_rate + tnr - 1) / denominator, 0.0, 1.0)[usable]
-        samples_used = int(estimates.size)
-        if samples_used:
-            interval = [float(value) for value in np.percentile(estimates, [2.5, 97.5])]
+            usable[start:stop] = (pass_counts > 0) & (fail_counts > 0) & (denominator > 0)
+            estimates[start:stop] = np.clip((observed_pass_rate + tnr - 1) / denominator, 0.0, 1.0)
+    lower = float(np.percentile(np.where(usable, estimates, 0.0), 2.5))
+    upper = float(np.percentile(np.where(usable, estimates, 1.0), 97.5))
 
     return {
         "population_size": len(observed),
         "observed_pass_rate": observed_pass_rate,
         "corrected_pass_rate": estimate,
-        "confidence_interval_95": interval,
+        "confidence_interval_95": [lower, upper],
         "judge_tpr": metrics["tpr"],
         "judge_tnr": metrics["tnr"],
         "test_examples": metrics["examples"],
         "bootstrap_iterations": iterations,
-        "bootstrap_samples_used": samples_used,
+        "bootstrap_samples_uncorrectable": int(iterations - usable.sum()),
     }
 
 

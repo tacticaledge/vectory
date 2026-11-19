@@ -127,11 +127,14 @@ vectory estimate production-judged.jsonl \
   --test-set judge-splits/test.jsonl \
   --human-column human_label \
   --split-manifest judge-splits/split_manifest.json \
+  --evaluator eval-review/evaluators/failure-unsupported-claim.json \
   --min-pass-rate 0.90 \
   --out success-estimate.json
 ```
 
-The report includes the observed rate, the corrected rate, and a 95% bootstrap interval. The interval resamples the test pairs 20,000 times by default and holds the observed rate fixed, so it reflects uncertainty in the judge's accuracy. With `--min-pass-rate`, the command exits nonzero unless the interval's lower bound reaches the threshold. Correction is refused when TPR + TNR is 1 or less, because such a judge carries no signal. Raising TPR usually narrows the interval the most.
+The report includes the observed rate, the corrected rate, and a 95% bootstrap interval. The interval resamples the test pairs 20,000 times by default and holds the observed rate fixed, so it reflects uncertainty in the judge's accuracy. A resample that lacks a class or leaves the judge at or below chance cannot be corrected, so it counts as 0 for the lower bound and 1 for the upper bound; a weak judge therefore produces a wide interval rather than a falsely narrow one. The report counts these resamples.
+
+`--min-pass-rate` requires `--evaluator`. The command exits nonzero unless the evaluator is validated, its latest validation report matches the labels in the test set, and the interval's lower bound reaches the threshold. Correction is refused when TPR + TNR is 1 or less, because such a judge carries no signal. Raising TPR usually narrows the interval the most.
 
 Use a random sample of outputs for the estimate. Coverage-biased discovery samples do not represent production prevalence.
 
