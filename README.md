@@ -81,6 +81,24 @@ vectory estimate production-judged.jsonl \
 
 When gating, every judged row must carry an `evaluator_id` field naming the evaluator that produced its label, so a validated evaluator's accuracy is never applied to another judge's labels. Use `--dataset-evaluator-column` if your field has a different name.
 
+Compare two stored runs on the same items before calling a change a win or a regression:
+
+```bash
+vectory compare-runs data/example_paired_runs.jsonl \
+  --run-a candidate-v2 \
+  --run-b baseline-v1 \
+  --target-effect 0.05
+```
+
+```text
+Items: n=12, paired rows=24, runs per item=2-2
+Mean difference: 0.3333, 95% CI=[0.0833, 0.5833]
+McNemar exact p-value: 0.021484 (discordant candidate-v2-only=9, baseline-v1-only=1)
+Standard error: clustered=0.1421, row-level=0.1153, design effect=1.52
+```
+
+The comparison pairs the runs item by item, so it reports the mean per-item difference with a 95% bootstrap interval, the exact McNemar p-value on the discordant pairs, an item-level clustered standard error that accounts for repeated runs of the same item, and how many paired items a target effect would need.
+
 See the [human-grounded evaluation workflow](docs/evaluation_workflow.md) for the app flow, artifact schema, validation metrics, and CI behavior.
 
 Run the included agent benchmark example from the CLI:

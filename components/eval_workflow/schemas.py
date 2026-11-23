@@ -207,6 +207,53 @@ class SuccessRateReport(StrictModel):
     gate_blockers: list[str] = Field(default_factory=list)
 
 
+class McNemarResult(StrictModel):
+    paired_rows: int = Field(ge=1)
+    discordant_a_only: int = Field(ge=0)
+    discordant_b_only: int = Field(ge=0)
+    p_value: float = Field(ge=0, le=1)
+
+
+class PairedPowerPlan(StrictModel):
+    alpha: float = Field(gt=0, lt=1)
+    power: float = Field(gt=0, lt=1)
+    item_difference_sd: float = Field(ge=0)
+    minimum_detectable_effect: float = Field(ge=0)
+    target_effect: float | None = Field(default=None, gt=0)
+    required_items: int | None = Field(default=None, ge=1)
+
+
+class PairedComparison(StrictModel):
+    items: int = Field(ge=2)
+    paired_rows: int = Field(ge=2)
+    runs_per_item_min: int = Field(ge=1)
+    runs_per_item_max: int = Field(ge=1)
+    excluded_unpaired_items: int = Field(ge=0)
+    pass_rate_a: float = Field(ge=0, le=1)
+    pass_rate_b: float = Field(ge=0, le=1)
+    mean_difference: float = Field(ge=-1, le=1)
+    confidence_interval_95: tuple[float, float]
+    bootstrap_iterations: int = Field(ge=1)
+    seed: int
+    clustered_standard_error: float = Field(ge=0)
+    naive_standard_error: float = Field(ge=0)
+    design_effect: float = Field(ge=0)
+    mcnemar: McNemarResult
+    power: PairedPowerPlan
+
+
+class PairedComparisonReport(StrictModel):
+    schema_version: Literal["1.0"]
+    created_at: str = Field(min_length=1)
+    dataset: str = Field(min_length=1)
+    item_column: str = Field(min_length=1)
+    run_column: str = Field(min_length=1)
+    outcome_column: str = Field(min_length=1)
+    run_a: str = Field(min_length=1)
+    run_b: str = Field(min_length=1)
+    comparison: PairedComparison
+
+
 class EvaluatorValidation(StrictModel):
     required: Literal[True] = True
     validated: bool = False

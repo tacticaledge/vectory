@@ -172,6 +172,40 @@ The report includes the observed rate, the corrected rate, and a 95% bootstrap i
 
 Use a random sample of outputs for the estimate. Coverage-biased discovery samples do not represent production prevalence.
 
+## Compare two runs on the same items
+
+A higher pass rate is not yet a better system. Two prompts, models, or configurations scored on the same dataset must be compared as paired measurements, because the item-to-item variation they share cancels out and only the disagreements carry evidence:
+
+```bash
+vectory compare-runs data/example_paired_runs.jsonl \
+  --run-a candidate-v2 \
+  --run-b baseline-v1 \
+  --target-effect 0.05 \
+  --out run-comparison.json
+```
+
+Each row names one item, one run, and one binary outcome. Defaults are `item_id`, `run_id`, and `judge_label`; rename them with `--item-column`, `--run-column`, and `--outcome-column`. Rows from other runs are ignored, items that only one run covered are excluded and counted, and an item whose two runs carry different numbers of repeated rows is refused rather than paired arbitrarily.
+
+The report contains:
+
+| Field | Meaning |
+| --- | --- |
+| `mean_difference` | Mean per-item difference in pass rate, `run_a` minus `run_b` |
+| `confidence_interval_95` | Percentile bootstrap interval that resamples items, not rows |
+| `mcnemar` | Discordant pair counts and the two-sided exact McNemar p-value |
+| `clustered_standard_error` | `sqrt(Var(per-item mean difference) / n)` |
+| `naive_standard_error` | Row-level standard error that ignores repetition |
+| `design_effect` | Squared ratio of the two, above 1 when repeats are correlated |
+| `power` | Item difference standard deviation, minimum detectable effect, and required items |
+
+The exact [McNemar test](https://en.wikipedia.org/wiki/McNemar%27s_test) reads only the discordant cells `b` and `c` of the paired table: under the null they split evenly, so `p = 2 * P(X <= min(b, c))` for `X ~ Binomial(b + c, 0.5)`, clipped at 1.0. No normal approximation or continuity correction is involved, so small and lopsided tables stay exact.
+
+Repeated sampling of the same item needs item-level clustering. The repeated runs of one item are correlated, so treating each run as an independent observation understates the standard error; Vectory therefore resamples whole items in the bootstrap and reports the clustered standard error alongside the row-level one it replaces. With one run per item the two are identical and the design effect is 1.
+
+Power planning uses the same item-level variance: `n >= (z_{1-alpha/2} + z_power)^2 * sigma_d^2 / delta^2`. Because the effect enters squared, detecting half the difference costs about four times as many items. Pass `--target-effect` with the difference that would actually change a decision and read `required_items` before running a larger comparison; `minimum_detectable_effect` reports what the current sample can resolve. Tune the plan with `--alpha` and `--power`, and the interval with `--bootstrap-iterations` and `--seed`. The same seed and item ordering reproduce the interval exactly.
+
+An interval that includes 0 means the comparison did not establish a difference, no matter which run scored higher. The command is a report, not a gate: it always exits 0, so quote the interval, the p-value, and the item count `n` rather than a bare pass-rate delta.
+
 ## Use with Vectory Benchmark
 
 The human-grounded workflow captures product-specific expectations. Vectory Benchmark supplies complementary deterministic and proof-grounded agent checks:
@@ -195,4 +229,4 @@ Vectory is a public MIT-licensed package. Tactical Edge's shared `commons-python
 
 ## Design sources
 
-The workflow adapts the error-discovery loop from [AI Evals for Engineers](https://github.com/ai-evals-course/evals-skills) and the critique-shadowing process in [Using LLM-as-a-Judge for Evaluation](https://hamel.dev/blog/posts/llm-judge/). Vectory's implementation is independent and uses its own versioned artifacts, UI, CLI, validation metrics, and Vectory Benchmark gates.
+The workflow adapts the error-discovery loop from [AI Evals for Engineers](https://github.com/ai-evals-course/evals-skills) and the critique-shadowing process in [Using LLM-as-a-Judge for Evaluation](https://hamel.dev/blog/posts/llm-judge/). The paired comparison, item-level clustering, and sample-size planning follow the recommendations in [Adding Error Bars to Evals](https://arxiv.org/abs/2411.00640). Vectory's implementation is independent and uses its own versioned artifacts, UI, CLI, validation metrics, and Vectory Benchmark gates.

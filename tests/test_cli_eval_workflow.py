@@ -1247,6 +1247,48 @@ def test_validate_judge_enforces_stricter_evaluator_thresholds(tmp_path):
     assert updated_evaluator["status"] == "validation_failed"
 
 
+def test_compare_runs_reports_paired_difference_and_power(tmp_path, capsys):
+    dataset = Path(__file__).resolve().parents[1] / "data" / "example_paired_runs.jsonl"
+    report_path = tmp_path / "comparison.json"
+
+    assert main(
+        [
+            "compare-runs",
+            str(dataset),
+            "--run-a",
+            "candidate-v2",
+            "--run-b",
+            "baseline-v1",
+            "--target-effect",
+            "0.1",
+            "--bootstrap-iterations",
+            "300",
+            "--out",
+            str(report_path),
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    assert "Items: n=12, paired rows=24, runs per item=2-2" in output
+    assert "Mean difference: 0.3333, 95% CI=[" in output
+    assert "McNemar exact p-value: 0.021484" in output
+    assert "needs n=" in output
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    comparison = report["comparison"]
+    assert report["run_a"] == "candidate-v2"
+    assert comparison["items"] == 12
+    assert comparison["mcnemar"] == {
+        "paired_rows": 24,
+        "discordant_a_only": 9,
+        "discordant_b_only": 1,
+        "p_value": 22 / 1024,
+    }
+    assert comparison["confidence_interval_95"][0] > 0
+    assert comparison["clustered_standard_error"] > comparison["naive_standard_error"]
+    assert comparison["power"]["required_items"] >= 1
+
+
 if __name__ == "__main__":
     from tests.utils import pytest_this_file
 
