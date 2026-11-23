@@ -47,9 +47,15 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
    Report the corrected rate with its 95% interval, not the raw judge pass rate. To gate on the interval's lower bound, add `--min-pass-rate` together with `--evaluator EVALUATOR_JSON`; only a validated evaluator can gate, and every judged row must name that evaluator in its `evaluator_id` field.
 
-8. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
+8. To compare two prompts, models, or configurations scored on the same items, run:
 
-9. When reliability under repetition matters, submit several runs per `task_id` to `vectory benchmark`. The leaderboard and report bundle then add unbiased `pass@k` and `pass^k`; quote `pass^k`, success on every one of `k` tries, for production readiness, and say which `k` and how many repeated tasks it covers.
+   `vectory compare-runs DATASET --run-a RUN_A --run-b RUN_B --target-effect DELTA`
+
+   Each row names one item, one run, and one binary outcome (`item_id`, `run_id`, `judge_label` by default). Report the mean per-item difference with its 95% bootstrap interval, the exact paired sign test p-value, and the item count `n`; never claim a win from a raw pass-rate delta. With repeated runs per item, quote the clustered standard error, not the row-level one. When the interval includes 0, say the comparison did not establish a difference and use `required_items` to say how many paired items the effect you care about would need.
+
+9. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
+
+10. When reliability under repetition matters, submit several runs per `task_id` to `vectory benchmark`. The leaderboard and report bundle then add unbiased `pass@k` and `pass^k`; quote `pass^k`, success on every one of `k` tries, for production readiness, and say which `k` and how many repeated tasks it covers.
 
 ## Preserve these invariants
 
@@ -60,5 +66,6 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 - Draw judge examples from the train split only, and never from dev or test records.
 - Require both true-pass rate and true-fail rate. Inspect per-class precision and recall, not raw agreement alone.
 - Do not claim review, validation, or production readiness that did not happen.
+- Compare two systems as paired measurements on the same items, and treat repeated runs of one item as one cluster.
 - Re-run expert alignment after material model, prompt, tool, or policy changes.
 - Keep sensitive traces local unless the user explicitly authorizes an external model or service.

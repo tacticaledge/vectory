@@ -14,14 +14,17 @@ from importlib import resources
 from pathlib import Path
 
 from components.eval_workflow import (
+    DEFAULT_BOOTSTRAP_ITERATIONS,
     DEFAULT_MINIMUM_CHARACTERS,
     HELD_OUT_SPLITS,
     JudgeValidationReport,
     LeakageReport,
+    PairedComparisonReport,
     SuccessRateReport,
     archive_review_workspace,
     bootstrap_metric_intervals,
     build_evaluator_definition,
+    compare_paired_runs,
     dataframe_to_records,
     describe_leakage,
     detect_evaluator_leakage,
@@ -765,6 +768,86 @@ def run_estimate(args: argparse.Namespace) -> int:
     return 0 if gate_passed else 1
 
 
+def run_compare_runs(args: argparse.Namespace) -> int:
+    if args.bootstrap_iterations <= 0:
+        raise ValueError("Bootstrap iterations must be positive")
+    records = _load_records(args.dataset)
+    comparison = compare_paired_runs(
+        records,
+        run_a=args.run_a,
+        run_b=args.run_b,
+        item_field=args.item_column,
+        run_field=args.run_column,
+        outcome_field=args.outcome_column,
+        iterations=args.bootstrap_iterations,
+        seed=args.seed,
+        alpha=args.alpha,
+        power=args.power,
+        target_effect=args.target_effect,
+    )
+    report = PairedComparisonReport.model_validate(
+        {
+            "schema_version": "1.0",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "dataset": str(args.dataset),
+            "item_column": args.item_column,
+            "run_column": args.run_column,
+            "outcome_column": args.outcome_column,
+            "run_a": args.run_a,
+            "run_b": args.run_b,
+            "comparison": comparison,
+        }
+    )
+    if args.out:
+        _write_json(args.out, report.model_dump(mode="json", by_alias=True))
+        print(f"Wrote paired comparison: {args.out}")
+    interval = comparison["confidence_interval_95"]
+    sign_test = comparison["sign_test"]
+    plan = comparison["power"]
+    print(f"Paired comparison: {args.run_a} minus {args.run_b}")
+    print(
+        f"Items: n={comparison['items']}, paired rows={comparison['paired_rows']}, "
+        f"runs per item={comparison['runs_per_item_min']}-{comparison['runs_per_item_max']}"
+    )
+    if comparison["excluded_unpaired_items"]:
+        print(
+            f"Excluded {comparison['excluded_unpaired_items']} items that only one run covered."
+        )
+    print(
+        f"Pass rates: {args.run_a}={comparison['pass_rate_a']:.3f}, "
+        f"{args.run_b}={comparison['pass_rate_b']:.3f}"
+    )
+    print(
+        f"Mean difference: {comparison['mean_difference']:.4f}, "
+        f"95% CI=[{interval[0]:.4f}, {interval[1]:.4f}]"
+    )
+    print(
+        f"Exact paired sign test p-value: {sign_test['p_value']:.6f} "
+        f"(items favoring {args.run_a}={sign_test['items_favoring_a']}, "
+        f"{args.run_b}={sign_test['items_favoring_b']})"
+    )
+    design_effect = comparison["design_effect"]
+    print(
+        f"Standard error: clustered={comparison['clustered_standard_error']:.4f}, "
+        f"row-level={comparison['naive_standard_error']:.4f}, "
+        "design effect="
+        + ("undefined" if design_effect is None else f"{design_effect:.2f}")
+    )
+    print(
+        f"Power: sigma_d={plan['item_difference_sd']:.4f}, "
+        f"MDE at n={comparison['items']} is {plan['minimum_detectable_effect']:.4f} "
+        f"({plan['power']:.0%} power, alpha={plan['alpha']})"
+    )
+    if plan["required_items"] is not None:
+        print(
+            f"Detecting a {plan['target_effect']} difference needs "
+            f"n={plan['required_items']} paired items."
+        )
+    if interval[0] <= 0 <= interval[1]:
+        print("Interval includes 0: this comparison does not establish a difference.")
+    return 0
+
+
 def _available(module: str) -> bool:
     return importlib.util.find_spec(module) is not None
 
@@ -1057,6 +1140,55 @@ def build_parser() -> argparse.ArgumentParser:
     estimate_parser.add_argument("--seed", type=int, default=42)
     estimate_parser.add_argument("--out", type=Path, help="Optional JSON estimate report path.")
     estimate_parser.set_defaults(func=run_estimate)
+
+    compare_parser = subparsers.add_parser(
+        "compare-runs",
+        help="Compare two stored runs on the same items with a paired significance test.",
+    )
+    compare_parser.add_argument("dataset", type=Path, help="JSON, JSONL, or CSV of per-item run outcomes.")
+    compare_parser.add_argument("--run-a", required=True, help="Run id measured as the candidate.")
+    compare_parser.add_argument("--run-b", required=True, help="Run id measured as the baseline.")
+    compare_parser.add_argument(
+        "--item-column",
+        default="item_id",
+        help="Field identifying the shared dataset item. Default: item_id.",
+    )
+    compare_parser.add_argument(
+        "--run-column",
+        default="run_id",
+        help="Field naming the run or configuration of each row. Default: run_id.",
+    )
+    compare_parser.add_argument(
+        "--outcome-column",
+        default="judge_label",
+        help="Binary Pass/Fail outcome column. Default: judge_label.",
+    )
+    compare_parser.add_argument(
+        "--target-effect",
+        type=float,
+        help="Difference worth detecting; reports the paired items that power requires.",
+    )
+    compare_parser.add_argument(
+        "--alpha",
+        type=float,
+        default=0.05,
+        help="Two-sided significance level for the power plan. Default: 0.05.",
+    )
+    compare_parser.add_argument(
+        "--power",
+        type=float,
+        default=0.8,
+        help="Target power for the sample-size plan. Default: 0.8.",
+    )
+    compare_parser.add_argument(
+        "--bootstrap-iterations",
+        type=int,
+        default=DEFAULT_BOOTSTRAP_ITERATIONS,
+        help=f"Item resamples behind the interval. Default: {DEFAULT_BOOTSTRAP_ITERATIONS}.",
+    )
+    compare_parser.add_argument("--seed", type=int, default=42)
+    compare_parser.add_argument("--out", type=Path, help="Optional JSON comparison report path.")
+    compare_parser.set_defaults(func=run_compare_runs)
 
     doctor_parser = subparsers.add_parser("doctor", help="Check local Vectory installation health.")
     doctor_parser.set_defaults(func=doctor)

@@ -207,6 +207,56 @@ class SuccessRateReport(StrictModel):
     gate_blockers: list[str] = Field(default_factory=list)
 
 
+class SignTestResult(StrictModel):
+    paired_items: int = Field(ge=2)
+    items_favoring_a: int = Field(ge=0)
+    items_favoring_b: int = Field(ge=0)
+    p_value: float = Field(ge=0, le=1)
+
+
+class PairedPowerPlan(StrictModel):
+    alpha: float = Field(gt=0, lt=1)
+    power: float = Field(gt=0, lt=1)
+    item_difference_sd: float = Field(ge=0)
+    minimum_detectable_effect: float = Field(ge=0)
+    target_effect: float | None = Field(default=None, gt=0)
+    # Floored at the two paired items a comparison itself requires.
+    required_items: int | None = Field(default=None, ge=2)
+
+
+class PairedComparison(StrictModel):
+    items: int = Field(ge=2)
+    # Rows of both runs, so the two paired items a comparison needs are 4 rows.
+    paired_rows: int = Field(ge=4)
+    runs_per_item_min: int = Field(ge=1)
+    runs_per_item_max: int = Field(ge=1)
+    excluded_unpaired_items: int = Field(ge=0)
+    pass_rate_a: float = Field(ge=0, le=1)
+    pass_rate_b: float = Field(ge=0, le=1)
+    mean_difference: float = Field(ge=-1, le=1)
+    confidence_interval_95: tuple[float, float]
+    bootstrap_iterations: int = Field(ge=1)
+    seed: int
+    clustered_standard_error: float = Field(ge=0)
+    naive_standard_error: float = Field(ge=0)
+    # Undefined, and therefore None, when the row-level standard error is zero.
+    design_effect: float | None = Field(default=None, ge=0)
+    sign_test: SignTestResult
+    power: PairedPowerPlan
+
+
+class PairedComparisonReport(StrictModel):
+    schema_version: Literal["1.0"]
+    created_at: str = Field(min_length=1)
+    dataset: str = Field(min_length=1)
+    item_column: str = Field(min_length=1)
+    run_column: str = Field(min_length=1)
+    outcome_column: str = Field(min_length=1)
+    run_a: str = Field(min_length=1)
+    run_b: str = Field(min_length=1)
+    comparison: PairedComparison
+
+
 class EvaluatorValidation(StrictModel):
     required: Literal[True] = True
     validated: bool = False

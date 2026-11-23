@@ -172,6 +172,49 @@ The report includes the observed rate, the corrected rate, and a 95% bootstrap i
 
 Use a random sample of outputs for the estimate. Coverage-biased discovery samples do not represent production prevalence.
 
+## Compare two runs on the same items
+
+A higher pass rate is not yet a better system. Two prompts, models, or configurations scored on the same dataset must be compared as paired measurements, because the item-to-item variation they share cancels out and only the disagreements carry evidence:
+
+```bash
+vectory compare-runs run-outcomes.jsonl \
+  --run-a candidate-v2 \
+  --run-b baseline-v1 \
+  --target-effect 0.05 \
+  --out run-comparison.json
+```
+
+The dataset path is read from your working directory. A source checkout ships example run outcomes at `data/example_paired_runs.jsonl` to run the command against.
+
+Each row names one item, one run, and one binary outcome. Defaults are `item_id`, `run_id`, and `judge_label`; rename them with `--item-column`, `--run-column`, and `--outcome-column`. Every row must name its run, but rows naming a third run are ignored without reading their other fields, items that only one run covered are excluded and counted, and an item whose two runs carry different numbers of repeated rows is refused, because its two pass rates would otherwise rest on different amounts of evidence.
+
+Item identifiers keep the type they carry in the dataset, so `1` and `"1"` stay two items rather than merging into one statistical unit, and a row whose item field is missing, null, or blank is refused instead of being grouped under an empty identifier.
+
+The paired unit is the item, never the row. An item's repeats collapse into its pass rate per run, so no row is paired against a particular repeat of the other run and reordering rows inside an item cannot move any reported number.
+
+The report contains:
+
+| Field | Meaning |
+| --- | --- |
+| `items` | Paired items, the independent unit of every statistic below |
+| `paired_rows` | Input rows retained, counting both runs of every paired item |
+| `pass_rate_a`, `pass_rate_b` | Mean per-item pass rate of each run, so their difference is `mean_difference` |
+| `mean_difference` | Mean per-item difference in pass rate, `run_a` minus `run_b` |
+| `confidence_interval_95` | Percentile bootstrap interval that resamples items, not rows |
+| `sign_test` | Counts of the items each run won and the two-sided exact sign test p-value |
+| `clustered_standard_error` | `sqrt(Var(per-item mean difference) / n)` |
+| `naive_standard_error` | Row-level standard error that ignores repetition |
+| `design_effect` | Squared ratio of the two, above 1 when repeats are correlated, `null` when the row-level error is 0 and the ratio is undefined |
+| `power` | Item difference standard deviation, minimum detectable effect, and required items |
+
+The exact paired [sign test](https://en.wikipedia.org/wiki/Sign_test) reads only the items the two runs disagree on: under the null those `b` items won by `run_a` and `c` items won by `run_b` split evenly, so `p = 2 * P(X <= min(b, c))` for `X ~ Binomial(b + c, 0.5)`, clipped at 1.0. No normal approximation or continuity correction is involved, so small and lopsided counts stay exact. Each item contributes at most one signed observation, decided by the sign of its pass-rate difference, and items the two runs tie on carry no information. Counting every repeated row instead would treat correlated repeats as independent evidence and make a handful of items look significant. With one run per item every item is one discordant binary pair and the test is exactly [McNemar's test](https://en.wikipedia.org/wiki/McNemar%27s_test); with repeated runs the per-item differences are fractional, so only their signs are read and the test remains a sign test rather than McNemar's.
+
+Repeated sampling of the same item needs item-level clustering. The repeated runs of one item are correlated, so treating each run as an independent observation understates the standard error; Vectory therefore resamples whole items in the bootstrap and reports the clustered standard error alongside the row-level one it replaces. Because repeats are exchangeable, that row-level figure averages over every within-item pairing of the two runs' repeats and divides by the row count. With one run per item the two standard errors are identical and the design effect is 1. When no spread remains at all, both standard errors are 0 and `design_effect` is `null`, because the ratio has no value.
+
+Power planning uses the same item-level variance: `n >= (z_{1-alpha/2} + z_power)^2 * sigma_d^2 / delta^2`. Because the effect enters squared, detecting half the difference costs about four times as many items. Pass `--target-effect` with the difference that would actually change a decision and read `required_items` before running a larger comparison; `minimum_detectable_effect` reports what the current sample can resolve. `required_items` is never below the two paired items a comparison itself requires, because an observed difference standard deviation of 0 is a property of the sample rather than proof that the population differences have no spread. Tune the plan with `--alpha` and `--power`, and the interval with `--bootstrap-iterations` and `--seed`. The same seed and item ordering reproduce the interval exactly.
+
+An interval that includes 0 means the comparison did not establish a difference, no matter which run scored higher. The command is a report, not a gate: it always exits 0, so quote the interval, the p-value, and the item count `n` rather than a bare pass-rate delta.
+
 ## Use with Vectory Benchmark
 
 The human-grounded workflow captures product-specific expectations. Vectory Benchmark supplies complementary deterministic and proof-grounded agent checks:
@@ -195,4 +238,4 @@ Vectory is a public MIT-licensed package. Tactical Edge's shared `commons-python
 
 ## Design sources
 
-The workflow adapts the error-discovery loop from [AI Evals for Engineers](https://github.com/ai-evals-course/evals-skills) and the critique-shadowing process in [Using LLM-as-a-Judge for Evaluation](https://hamel.dev/blog/posts/llm-judge/). Vectory's implementation is independent and uses its own versioned artifacts, UI, CLI, validation metrics, and Vectory Benchmark gates.
+The workflow adapts the error-discovery loop from [AI Evals for Engineers](https://github.com/ai-evals-course/evals-skills) and the critique-shadowing process in [Using LLM-as-a-Judge for Evaluation](https://hamel.dev/blog/posts/llm-judge/). The paired comparison, item-level clustering, and sample-size planning follow the recommendations in [Adding Error Bars to Evals](https://arxiv.org/abs/2411.00640). Vectory's implementation is independent and uses its own versioned artifacts, UI, CLI, validation metrics, and Vectory Benchmark gates.
