@@ -220,7 +220,8 @@ class PairedPowerPlan(StrictModel):
     item_difference_sd: float = Field(ge=0)
     minimum_detectable_effect: float = Field(ge=0)
     target_effect: float | None = Field(default=None, gt=0)
-    required_items: int | None = Field(default=None, ge=1)
+    # Floored at the two paired items a comparison itself requires.
+    required_items: int | None = Field(default=None, ge=2)
 
 
 class PairedComparison(StrictModel):

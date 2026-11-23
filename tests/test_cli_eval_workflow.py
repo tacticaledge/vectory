@@ -1346,6 +1346,8 @@ def test_compare_runs_reports_an_undefined_design_effect_without_spread(tmp_path
             "candidate",
             "--run-b",
             "baseline",
+            "--target-effect",
+            "0.05",
             "--bootstrap-iterations",
             "100",
             "--out",
@@ -1353,9 +1355,13 @@ def test_compare_runs_reports_an_undefined_design_effect_without_spread(tmp_path
         ]
     ) == 0
 
-    assert "design effect=undefined" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "design effect=undefined" in output
+    # A sample without spread must not plan a comparison the command refuses.
+    assert "needs n=2 paired items" in output
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["comparison"]["design_effect"] is None
+    assert report["comparison"]["power"]["required_items"] == 2
 
 
 if __name__ == "__main__":

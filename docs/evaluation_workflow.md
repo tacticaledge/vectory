@@ -177,14 +177,16 @@ Use a random sample of outputs for the estimate. Coverage-biased discovery sampl
 A higher pass rate is not yet a better system. Two prompts, models, or configurations scored on the same dataset must be compared as paired measurements, because the item-to-item variation they share cancels out and only the disagreements carry evidence:
 
 ```bash
-vectory compare-runs data/example_paired_runs.jsonl \
+vectory compare-runs run-outcomes.jsonl \
   --run-a candidate-v2 \
   --run-b baseline-v1 \
   --target-effect 0.05 \
   --out run-comparison.json
 ```
 
-Each row names one item, one run, and one binary outcome. Defaults are `item_id`, `run_id`, and `judge_label`; rename them with `--item-column`, `--run-column`, and `--outcome-column`. Rows from other runs are ignored, items that only one run covered are excluded and counted, and an item whose two runs carry different numbers of repeated rows is refused, because its two pass rates would otherwise rest on different amounts of evidence.
+The dataset path is read from your working directory. A source checkout ships example run outcomes at `data/example_paired_runs.jsonl` to run the command against.
+
+Each row names one item, one run, and one binary outcome. Defaults are `item_id`, `run_id`, and `judge_label`; rename them with `--item-column`, `--run-column`, and `--outcome-column`. Every row must name its run, but rows naming a third run are ignored without reading their other fields, items that only one run covered are excluded and counted, and an item whose two runs carry different numbers of repeated rows is refused, because its two pass rates would otherwise rest on different amounts of evidence.
 
 The paired unit is the item, never the row. An item's repeats collapse into its pass rate per run, so no row is paired against a particular repeat of the other run and reordering rows inside an item cannot move any reported number.
 
@@ -205,7 +207,7 @@ The exact paired [sign test](https://en.wikipedia.org/wiki/Sign_test) reads only
 
 Repeated sampling of the same item needs item-level clustering. The repeated runs of one item are correlated, so treating each run as an independent observation understates the standard error; Vectory therefore resamples whole items in the bootstrap and reports the clustered standard error alongside the row-level one it replaces. Because repeats are exchangeable, that row-level figure averages over every within-item pairing of the two runs' repeats and divides by the row count. With one run per item the two standard errors are identical and the design effect is 1. When no spread remains at all, both standard errors are 0 and `design_effect` is `null`, because the ratio has no value.
 
-Power planning uses the same item-level variance: `n >= (z_{1-alpha/2} + z_power)^2 * sigma_d^2 / delta^2`. Because the effect enters squared, detecting half the difference costs about four times as many items. Pass `--target-effect` with the difference that would actually change a decision and read `required_items` before running a larger comparison; `minimum_detectable_effect` reports what the current sample can resolve. Tune the plan with `--alpha` and `--power`, and the interval with `--bootstrap-iterations` and `--seed`. The same seed and item ordering reproduce the interval exactly.
+Power planning uses the same item-level variance: `n >= (z_{1-alpha/2} + z_power)^2 * sigma_d^2 / delta^2`. Because the effect enters squared, detecting half the difference costs about four times as many items. Pass `--target-effect` with the difference that would actually change a decision and read `required_items` before running a larger comparison; `minimum_detectable_effect` reports what the current sample can resolve. `required_items` is never below the two paired items a comparison itself requires, because an observed difference standard deviation of 0 is a property of the sample rather than proof that the population differences have no spread. Tune the plan with `--alpha` and `--power`, and the interval with `--bootstrap-iterations` and `--seed`. The same seed and item ordering reproduce the interval exactly.
 
 An interval that includes 0 means the comparison did not establish a difference, no matter which run scored higher. The command is a report, not a gate: it always exits 0, so quote the interval, the p-value, and the item count `n` rather than a bare pass-rate delta.
 

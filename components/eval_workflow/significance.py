@@ -12,6 +12,9 @@ from . import validation
 from .validation import normalize_binary_label
 
 DEFAULT_BOOTSTRAP_ITERATIONS = 10000
+# A paired comparison needs two items before any spread between them exists,
+# so no plan or report may rest on fewer.
+MINIMUM_PAIRED_ITEMS = 2
 
 
 def exact_sign_test_p_value(items_favoring_a: int, items_favoring_b: int) -> float:
@@ -135,17 +138,21 @@ def required_sample_size(
     alpha: float = 0.05,
     power: float = 0.8,
 ) -> int:
-    """Paired items needed to detect ``effect``.
+    """Paired items needed to detect ``effect``, never fewer than two.
 
     ``n >= (z_{1-alpha/2} + z_{power})^2 * sigma_d^2 / delta^2``, so halving the
-    effect worth detecting costs about four times as many items.
+    effect worth detecting costs about four times as many items. A tiny or zero
+    observed ``sigma_d`` can drive that bound below two, but a finite sample
+    does not establish that the population differences have no spread, and a
+    paired comparison needs two items before any spread can be estimated at
+    all, so the recommendation is floored at the smallest usable plan.
     """
     if effect <= 0:
         raise ValueError("Target effect must be positive")
     if difference_sd < 0:
         raise ValueError("Difference standard deviation must not be negative")
     factor = _power_factor(alpha, power)
-    return max(1, ceil(factor**2 * difference_sd**2 / effect**2))
+    return max(MINIMUM_PAIRED_ITEMS, ceil(factor**2 * difference_sd**2 / effect**2))
 
 
 def minimum_detectable_effect(
@@ -180,20 +187,26 @@ def paired_run_outcomes(
     run are excluded instead of compared against nothing, and an item whose two
     runs have different repeat counts is refused, because the two pass rates
     would then rest on different amounts of evidence.
+
+    Every row must name its run, but rows naming a third run are ignored and
+    their other fields are never read.
     """
     if run_a == run_b:
         raise ValueError("Compared run ids must be different")
     grouped: dict[str, dict[str, list[float]]] = {}
     order: list[str] = []
     for index, record in enumerate(records):
-        missing = [
-            field for field in (item_field, run_field, outcome_field) if field not in record
-        ]
-        if missing:
-            raise ValueError(f"Record {index} is missing columns: {', '.join(missing)}")
+        if run_field not in record:
+            raise ValueError(f"Record {index} is missing columns: {run_field}")
         run = str(record[run_field])
+        # Rows of other runs are skipped before their remaining fields are
+        # read, so an unrelated run's malformed rows cannot abort a comparison
+        # they take no part in.
         if run not in {run_a, run_b}:
             continue
+        missing = [field for field in (item_field, outcome_field) if field not in record]
+        if missing:
+            raise ValueError(f"Record {index} is missing columns: {', '.join(missing)}")
         item = str(record[item_field])
         if item not in grouped:
             grouped[item] = {run_a: [], run_b: []}

@@ -96,6 +96,13 @@ def test_required_sample_size_falls_by_four_when_the_effect_doubles():
         minimum_detectable_effect(64, 0.2, power=1.0)
 
 
+def test_required_sample_size_never_plans_fewer_than_two_paired_items():
+    # A sample without spread does not prove the population has none, and a
+    # paired comparison cannot run on one item, so the plan stays usable.
+    assert required_sample_size(0.05, 0.0) == 2
+    assert required_sample_size(0.5, 0.01) == 2
+
+
 def test_compare_paired_runs_reports_item_level_uncertainty():
     outcomes = {
         "item-1": (["Pass", "Pass"], ["Fail", "Fail"]),
@@ -273,6 +280,46 @@ def test_compare_paired_runs_refuses_unusable_pairings():
             run_a="candidate",
             run_b="baseline",
         )
+    with pytest.raises(ValueError, match="missing columns: run_id"):
+        compare_paired_runs(
+            [{"item_id": "item-1", "judge_label": "Pass"}],
+            run_a="candidate",
+            run_b="baseline",
+        )
+
+
+def test_malformed_rows_of_a_third_run_do_not_abort_the_comparison():
+    # Rows of an uncompared run take no part in the result, so missing item or
+    # outcome fields on them must be skipped rather than refused.
+    records = paired_records(
+        {
+            "item-1": (["Pass"], ["Fail"]),
+            "item-2": (["Pass"], ["Pass"]),
+            "item-3": (["Fail"], ["Pass"]),
+        }
+    )
+    records.append({"run_id": "other-run"})
+    records.append({"run_id": "other-run", "item_id": "item-1"})
+
+    report = compare_paired_runs(
+        records, run_a="candidate", run_b="baseline", iterations=200
+    )
+    clean = compare_paired_runs(
+        paired_records(
+            {
+                "item-1": (["Pass"], ["Fail"]),
+                "item-2": (["Pass"], ["Pass"]),
+                "item-3": (["Fail"], ["Pass"]),
+            }
+        ),
+        run_a="candidate",
+        run_b="baseline",
+        iterations=200,
+    )
+
+    assert report == clean
+    assert report["items"] == 3
+    assert report["excluded_unpaired_items"] == 0
 
 
 if __name__ == "__main__":
