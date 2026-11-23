@@ -2,44 +2,39 @@
 
 from __future__ import annotations
 
-import random
-from math import ceil, comb, floor, sqrt
+from math import ceil, comb, sqrt
 from statistics import NormalDist, fmean, variance
 from typing import Any, Mapping, Sequence
 
+import numpy as np
+
+from . import validation
 from .validation import normalize_binary_label
 
 DEFAULT_BOOTSTRAP_ITERATIONS = 10000
 
 
-def exact_mcnemar_p_value(discordant_a_only: int, discordant_b_only: int) -> float:
-    """Two-sided exact McNemar p-value from the discordant cells of a paired table.
+def exact_sign_test_p_value(items_favoring_a: int, items_favoring_b: int) -> float:
+    """Two-sided exact paired sign test p-value from the two counts of winners.
 
-    Concordant pairs carry no information about which run is better, so the test
-    reads only the cells where the runs disagree. The counts must come from
-    independent paired units, which under repeated sampling means items rather
-    than rows. Under the null those pairs split evenly, giving
+    Items the two runs tie on carry no information about which run is better, so
+    the test reads only the items with a non-zero difference. The counts must
+    come from independent paired units, which under repeated sampling means
+    items rather than rows. Under the null those items split evenly, giving
     ``p = 2 * P(X <= min(b, c))`` for ``X ~ Binomial(b + c, 0.5)``, clipped at
-    1.0 because doubling a tail above one half overshoots.
+    1.0 because doubling a tail above one half overshoots. With a single binary
+    run per item each item is one discordant pair, so this is exactly the
+    two-sided exact McNemar test; with repeated runs the differences are
+    fractional and only their signs are read, which is the sign test.
     """
-    if discordant_a_only < 0 or discordant_b_only < 0:
-        raise ValueError("Discordant pair counts must not be negative")
-    discordant = discordant_a_only + discordant_b_only
-    if discordant == 0:
+    if items_favoring_a < 0 or items_favoring_b < 0:
+        raise ValueError("Paired winner counts must not be negative")
+    decided = items_favoring_a + items_favoring_b
+    if decided == 0:
         return 1.0
-    smaller = min(discordant_a_only, discordant_b_only)
-    tail = sum(comb(discordant, hits) for hits in range(smaller + 1)) / 2**discordant
+    smaller = min(items_favoring_a, items_favoring_b)
+    tail = sum(comb(decided, hits) for hits in range(smaller + 1)) / 2**decided
     return min(1.0, 2.0 * tail)
-
-
-def _percentile(sorted_values: Sequence[float], percentile: float) -> float:
-    position = (len(sorted_values) - 1) * percentile / 100.0
-    lower = floor(position)
-    upper = ceil(position)
-    if lower == upper:
-        return float(sorted_values[lower])
-    weight = position - lower
-    return float(sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight)
 
 
 def paired_bootstrap_interval(
@@ -61,17 +56,19 @@ def paired_bootstrap_interval(
         raise ValueError("Confidence must be between 0 and 1")
     if len(item_differences) < 2:
         raise ValueError("At least two paired items are required")
-    rng = random.Random(seed)
-    count = len(item_differences)
-    means = []
-    for _ in range(iterations):
-        total = 0.0
-        for _ in range(count):
-            total += item_differences[rng.randrange(count)]
-        means.append(total / count)
-    means.sort()
+    differences = np.asarray(item_differences, dtype=float)
+    rng = np.random.default_rng(seed)
+    means = np.empty(iterations)
+    # Resample in bounded chunks so memory stays flat for large item counts.
+    chunk_size = max(1, validation._BOOTSTRAP_CELLS_PER_CHUNK // len(differences))
+    for start in range(0, iterations, chunk_size):
+        stop = min(start + chunk_size, iterations)
+        indices = rng.integers(0, len(differences), size=(stop - start, len(differences)))
+        means[start:stop] = differences[indices].mean(axis=1)
     remainder = (1.0 - confidence) / 2.0 * 100.0
-    return [_percentile(means, remainder), _percentile(means, 100.0 - remainder)]
+    return [
+        float(value) for value in np.percentile(means, [remainder, 100.0 - remainder])
+    ]
 
 
 def clustered_standard_error(item_differences: Sequence[float]) -> float:
@@ -242,10 +239,10 @@ def paired_run_outcomes(
         "rows": sum(item["runs"] for item in items),
         "item_pass_rates_a": [item["pass_rate_a"] for item in items],
         "item_pass_rates_b": [item["pass_rate_b"] for item in items],
-        # One discordant observation per item, so correlated repeats of the same
-        # item never count as separate evidence in the McNemar test.
-        "discordant_a_only": sum(1 for difference in item_differences if difference > 0),
-        "discordant_b_only": sum(1 for difference in item_differences if difference < 0),
+        # One signed observation per item, so correlated repeats of the same
+        # item never count as separate evidence in the sign test.
+        "items_favoring_a": sum(1 for difference in item_differences if difference > 0),
+        "items_favoring_b": sum(1 for difference in item_differences if difference < 0),
         "excluded_unpaired_items": excluded,
     }
 
@@ -267,9 +264,9 @@ def compare_paired_runs(
     """Compare two runs on the same items with a paired test, interval, and plan.
 
     Every statistic is item-level: the interval resamples items, the standard
-    error clusters on items, and the McNemar test counts one discordant
-    observation per item. Repeated runs of one item therefore sharpen that
-    item's estimate without passing for extra independent evidence.
+    error clusters on items, and the sign test counts one signed observation
+    per item. Repeated runs of one item therefore sharpen that item's estimate
+    without passing for extra independent evidence.
     """
     outcomes = paired_run_outcomes(
         records,
@@ -305,14 +302,16 @@ def compare_paired_runs(
         "clustered_standard_error": clustered,
         "naive_standard_error": naive,
         # Above 1 the repeated runs are correlated, so row-level inference would
-        # report a narrower interval than the data supports.
-        "design_effect": (clustered / naive) ** 2 if naive else 1.0,
-        "mcnemar": {
+        # report a narrower interval than the data supports. A row-level error of
+        # zero leaves the ratio undefined, which is reported as None rather than
+        # as a design effect the data does not support.
+        "design_effect": (clustered / naive) ** 2 if naive else None,
+        "sign_test": {
             "paired_items": len(item_differences),
-            "discordant_a_only": outcomes["discordant_a_only"],
-            "discordant_b_only": outcomes["discordant_b_only"],
-            "p_value": exact_mcnemar_p_value(
-                outcomes["discordant_a_only"], outcomes["discordant_b_only"]
+            "items_favoring_a": outcomes["items_favoring_a"],
+            "items_favoring_b": outcomes["items_favoring_b"],
+            "p_value": exact_sign_test_p_value(
+                outcomes["items_favoring_a"], outcomes["items_favoring_b"]
             ),
         },
         "power": {

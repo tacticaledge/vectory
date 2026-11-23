@@ -1271,24 +1271,91 @@ def test_compare_runs_reports_paired_difference_and_power(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "Items: n=12, paired rows=24, runs per item=2-2" in output
     assert "Mean difference: 0.3333, 95% CI=[" in output
-    assert "McNemar exact p-value: 0.125000" in output
+    assert "Exact paired sign test p-value: 0.125000" in output
     assert "needs n=" in output
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     comparison = report["comparison"]
     assert report["run_a"] == "candidate-v2"
     assert comparison["items"] == 12
-    # One discordant observation per item, not per repeated row: the 24 rows of
+    # One signed observation per item, not per repeated row: the 24 rows of
     # 12 items cannot stand in for 24 independent paired observations.
-    assert comparison["mcnemar"] == {
+    assert comparison["sign_test"] == {
         "paired_items": 12,
-        "discordant_a_only": 6,
-        "discordant_b_only": 1,
+        "items_favoring_a": 6,
+        "items_favoring_b": 1,
         "p_value": 16 / 128,
     }
     assert comparison["confidence_interval_95"][0] > 0
     assert comparison["clustered_standard_error"] > comparison["naive_standard_error"]
     assert comparison["power"]["required_items"] >= 1
+
+
+def test_compare_runs_matches_the_documented_example_output(capsys):
+    dataset = Path(__file__).resolve().parents[1] / "data" / "example_paired_runs.jsonl"
+
+    assert main(
+        [
+            "compare-runs",
+            str(dataset),
+            "--run-a",
+            "candidate-v2",
+            "--run-b",
+            "baseline-v1",
+            "--target-effect",
+            "0.05",
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    for line in (
+        "Items: n=12, paired rows=24, runs per item=2-2",
+        "Mean difference: 0.3333, 95% CI=[0.0833, 0.5833]",
+        "Exact paired sign test p-value: 0.125000 "
+        "(items favoring candidate-v2=6, baseline-v1=1)",
+        "Standard error: clustered=0.1421, row-level=0.1153, design effect=1.52",
+    ):
+        assert line in output
+
+
+def test_compare_runs_reports_an_undefined_design_effect_without_spread(tmp_path, capsys):
+    # Every row of every item repeats the same outcomes, so both standard errors
+    # are zero and the reported design effect has no defined value.
+    dataset = tmp_path / "identical.jsonl"
+    dataset.write_text(
+        "\n".join(
+            json.dumps({"item_id": f"item-{index}", "run_id": run, "judge_label": label})
+            for index in range(4)
+            for run, label in (
+                ("candidate", "Pass"),
+                ("candidate", "Pass"),
+                ("baseline", "Fail"),
+                ("baseline", "Fail"),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    report_path = tmp_path / "comparison.json"
+
+    assert main(
+        [
+            "compare-runs",
+            str(dataset),
+            "--run-a",
+            "candidate",
+            "--run-b",
+            "baseline",
+            "--bootstrap-iterations",
+            "100",
+            "--out",
+            str(report_path),
+        ]
+    ) == 0
+
+    assert "design effect=undefined" in capsys.readouterr().out
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["comparison"]["design_effect"] is None
 
 
 if __name__ == "__main__":

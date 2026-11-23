@@ -802,7 +802,7 @@ def run_compare_runs(args: argparse.Namespace) -> int:
         _write_json(args.out, report.model_dump(mode="json", by_alias=True))
         print(f"Wrote paired comparison: {args.out}")
     interval = comparison["confidence_interval_95"]
-    mcnemar = comparison["mcnemar"]
+    sign_test = comparison["sign_test"]
     plan = comparison["power"]
     print(f"Paired comparison: {args.run_a} minus {args.run_b}")
     print(
@@ -822,14 +822,16 @@ def run_compare_runs(args: argparse.Namespace) -> int:
         f"95% CI=[{interval[0]:.4f}, {interval[1]:.4f}]"
     )
     print(
-        f"McNemar exact p-value: {mcnemar['p_value']:.6f} "
-        f"(discordant items {args.run_a}-only={mcnemar['discordant_a_only']}, "
-        f"{args.run_b}-only={mcnemar['discordant_b_only']})"
+        f"Exact paired sign test p-value: {sign_test['p_value']:.6f} "
+        f"(items favoring {args.run_a}={sign_test['items_favoring_a']}, "
+        f"{args.run_b}={sign_test['items_favoring_b']})"
     )
+    design_effect = comparison["design_effect"]
     print(
         f"Standard error: clustered={comparison['clustered_standard_error']:.4f}, "
         f"row-level={comparison['naive_standard_error']:.4f}, "
-        f"design effect={comparison['design_effect']:.2f}"
+        "design effect="
+        + ("undefined" if design_effect is None else f"{design_effect:.2f}")
     )
     print(
         f"Power: sigma_d={plan['item_difference_sd']:.4f}, "

@@ -207,10 +207,10 @@ class SuccessRateReport(StrictModel):
     gate_blockers: list[str] = Field(default_factory=list)
 
 
-class McNemarResult(StrictModel):
+class SignTestResult(StrictModel):
     paired_items: int = Field(ge=2)
-    discordant_a_only: int = Field(ge=0)
-    discordant_b_only: int = Field(ge=0)
+    items_favoring_a: int = Field(ge=0)
+    items_favoring_b: int = Field(ge=0)
     p_value: float = Field(ge=0, le=1)
 
 
@@ -237,8 +237,9 @@ class PairedComparison(StrictModel):
     seed: int
     clustered_standard_error: float = Field(ge=0)
     naive_standard_error: float = Field(ge=0)
-    design_effect: float = Field(ge=0)
-    mcnemar: McNemarResult
+    # Undefined, and therefore None, when the row-level standard error is zero.
+    design_effect: float | None = Field(default=None, ge=0)
+    sign_test: SignTestResult
     power: PairedPowerPlan
 
 

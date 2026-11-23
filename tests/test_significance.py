@@ -6,10 +6,11 @@ if __name__ == "__main__":
 
 import pytest
 
+from components.eval_workflow import validation
 from components.eval_workflow import (
     clustered_standard_error,
     compare_paired_runs,
-    exact_mcnemar_p_value,
+    exact_sign_test_p_value,
     minimum_detectable_effect,
     naive_standard_error,
     paired_bootstrap_interval,
@@ -29,14 +30,14 @@ def paired_records(outcomes, run_a="candidate", run_b="baseline"):
     return records
 
 
-def test_exact_mcnemar_matches_hand_computed_binomial_tail():
+def test_exact_sign_test_matches_hand_computed_binomial_tail():
     # b=10, c=2: 2 * (C(12,0) + C(12,1) + C(12,2)) / 2**12 = 158 / 4096.
-    assert exact_mcnemar_p_value(10, 2) == pytest.approx(158 / 4096, abs=1e-9)
-    assert exact_mcnemar_p_value(2, 10) == pytest.approx(158 / 4096, abs=1e-9)
-    assert exact_mcnemar_p_value(0, 0) == 1.0
-    assert exact_mcnemar_p_value(3, 3) == 1.0
+    assert exact_sign_test_p_value(10, 2) == pytest.approx(158 / 4096, abs=1e-9)
+    assert exact_sign_test_p_value(2, 10) == pytest.approx(158 / 4096, abs=1e-9)
+    assert exact_sign_test_p_value(0, 0) == 1.0
+    assert exact_sign_test_p_value(3, 3) == 1.0
     with pytest.raises(ValueError):
-        exact_mcnemar_p_value(-1, 2)
+        exact_sign_test_p_value(-1, 2)
 
 
 def test_paired_bootstrap_interval_repeats_exactly_for_one_seed():
@@ -48,6 +49,16 @@ def test_paired_bootstrap_interval_repeats_exactly_for_one_seed():
     assert first == second
     assert first != paired_bootstrap_interval(differences, iterations=500, seed=8)
     assert first[0] < sum(differences) / len(differences) < first[1]
+
+
+def test_paired_bootstrap_interval_is_unchanged_by_chunked_resampling(monkeypatch):
+    differences = [0.5, -0.25, 1.0, 0.0, 0.75, -0.5, 0.25, 0.5]
+
+    whole = paired_bootstrap_interval(differences, iterations=500, seed=7)
+    monkeypatch.setattr(validation, "_BOOTSTRAP_CELLS_PER_CHUNK", 8 * 17)
+    chunked = paired_bootstrap_interval(differences, iterations=500, seed=7)
+
+    assert chunked == whole
 
 
 def test_clustered_standard_error_exceeds_row_level_under_within_item_correlation():
@@ -108,10 +119,10 @@ def test_compare_paired_runs_reports_item_level_uncertainty():
     assert report["mean_difference"] == pytest.approx(2.0 / 6)
     assert report["pass_rate_a"] == pytest.approx(9 / 12)
     assert report["pass_rate_b"] == pytest.approx(5 / 12)
-    assert report["mcnemar"]["paired_items"] == 6
-    assert report["mcnemar"]["discordant_a_only"] == 3
-    assert report["mcnemar"]["discordant_b_only"] == 1
-    assert report["mcnemar"]["p_value"] == pytest.approx(exact_mcnemar_p_value(3, 1))
+    assert report["sign_test"]["paired_items"] == 6
+    assert report["sign_test"]["items_favoring_a"] == 3
+    assert report["sign_test"]["items_favoring_b"] == 1
+    assert report["sign_test"]["p_value"] == pytest.approx(exact_sign_test_p_value(3, 1))
     assert report["clustered_standard_error"] > report["naive_standard_error"]
     assert report["design_effect"] > 1
     assert report["power"]["required_items"] == required_sample_size(
@@ -142,7 +153,7 @@ def test_compare_paired_runs_ignores_row_order_within_an_item():
     assert first == second
 
 
-def test_repeating_every_item_does_not_strengthen_the_mcnemar_evidence():
+def test_repeating_every_item_does_not_strengthen_the_sign_test_evidence():
     outcomes = {
         "item-1": (["Pass"], ["Fail"]),
         "item-2": (["Pass"], ["Fail"]),
@@ -162,8 +173,8 @@ def test_repeating_every_item_does_not_strengthen_the_mcnemar_evidence():
     )
 
     assert four_times["paired_rows"] == 4 * once["paired_rows"]
-    assert four_times["mcnemar"] == once["mcnemar"]
-    assert four_times["mcnemar"]["paired_items"] == 5
+    assert four_times["sign_test"] == once["sign_test"]
+    assert four_times["sign_test"]["paired_items"] == 5
     assert four_times["mean_difference"] == once["mean_difference"]
     assert four_times["clustered_standard_error"] == pytest.approx(
         once["clustered_standard_error"]
@@ -173,6 +184,42 @@ def test_repeating_every_item_does_not_strengthen_the_mcnemar_evidence():
         once["naive_standard_error"] / 2, rel=0.2
     )
     assert four_times["design_effect"] > 3
+
+
+def test_sign_test_reads_the_sign_of_fractional_item_differences():
+    # No item here is a discordant binary pair: every item splits its repeats,
+    # so only the sign of the fractional pass-rate difference is available.
+    outcomes = {
+        "item-1": (["Pass", "Pass", "Pass", "Fail"], ["Pass", "Fail", "Fail", "Fail"]),
+        "item-2": (["Pass", "Pass", "Fail", "Fail"], ["Pass", "Fail", "Fail", "Fail"]),
+        "item-3": (["Pass", "Fail", "Fail", "Fail"], ["Pass", "Pass", "Fail", "Fail"]),
+        "item-4": (["Pass", "Fail", "Fail", "Fail"], ["Pass", "Fail", "Fail", "Fail"]),
+    }
+
+    report = compare_paired_runs(
+        paired_records(outcomes), run_a="candidate", run_b="baseline", iterations=200
+    )
+
+    assert report["sign_test"] == {
+        "paired_items": 4,
+        "items_favoring_a": 2,
+        "items_favoring_b": 1,
+        "p_value": pytest.approx(exact_sign_test_p_value(2, 1)),
+    }
+
+
+def test_design_effect_is_none_when_no_row_level_spread_remains():
+    # Every row of every item carries the same difference, so both standard
+    # errors are zero and their ratio is undefined rather than 1.
+    outcomes = {f"item-{index}": (["Pass", "Pass"], ["Fail", "Fail"]) for index in range(4)}
+
+    report = compare_paired_runs(
+        paired_records(outcomes), run_a="candidate", run_b="baseline", iterations=200
+    )
+
+    assert report["clustered_standard_error"] == 0.0
+    assert report["naive_standard_error"] == 0.0
+    assert report["design_effect"] is None
 
 
 def test_pass_rates_match_the_mean_difference_under_uneven_repeat_counts():

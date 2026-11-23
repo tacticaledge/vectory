@@ -51,7 +51,7 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
    `vectory compare-runs DATASET --run-a RUN_A --run-b RUN_B --target-effect DELTA`
 
-   Each row names one item, one run, and one binary outcome (`item_id`, `run_id`, `judge_label` by default). Report the mean per-item difference with its 95% bootstrap interval, the exact McNemar p-value, and the item count `n`; never claim a win from a raw pass-rate delta. With repeated runs per item, quote the clustered standard error, not the row-level one. When the interval includes 0, say the comparison did not establish a difference and use `required_items` to say how many paired items the effect you care about would need.
+   Each row names one item, one run, and one binary outcome (`item_id`, `run_id`, `judge_label` by default). Report the mean per-item difference with its 95% bootstrap interval, the exact paired sign test p-value, and the item count `n`; never claim a win from a raw pass-rate delta. With repeated runs per item, quote the clustered standard error, not the row-level one. When the interval includes 0, say the comparison did not establish a difference and use `required_items` to say how many paired items the effect you care about would need.
 
 9. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
 
