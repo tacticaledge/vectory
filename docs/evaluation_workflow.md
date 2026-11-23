@@ -188,12 +188,16 @@ The dataset path is read from your working directory. A source checkout ships ex
 
 Each row names one item, one run, and one binary outcome. Defaults are `item_id`, `run_id`, and `judge_label`; rename them with `--item-column`, `--run-column`, and `--outcome-column`. Every row must name its run, but rows naming a third run are ignored without reading their other fields, items that only one run covered are excluded and counted, and an item whose two runs carry different numbers of repeated rows is refused, because its two pass rates would otherwise rest on different amounts of evidence.
 
+Item identifiers keep the type they carry in the dataset, so `1` and `"1"` stay two items rather than merging into one statistical unit, and a row whose item field is missing, null, or blank is refused instead of being grouped under an empty identifier.
+
 The paired unit is the item, never the row. An item's repeats collapse into its pass rate per run, so no row is paired against a particular repeat of the other run and reordering rows inside an item cannot move any reported number.
 
 The report contains:
 
 | Field | Meaning |
 | --- | --- |
+| `items` | Paired items, the independent unit of every statistic below |
+| `paired_rows` | Input rows retained, counting both runs of every paired item |
 | `pass_rate_a`, `pass_rate_b` | Mean per-item pass rate of each run, so their difference is `mean_difference` |
 | `mean_difference` | Mean per-item difference in pass rate, `run_a` minus `run_b` |
 | `confidence_interval_95` | Percentile bootstrap interval that resamples items, not rows |

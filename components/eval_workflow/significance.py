@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from math import ceil, comb, sqrt
+from math import ceil, comb, isnan, sqrt
 from statistics import NormalDist, fmean, variance
 from typing import Any, Mapping, Sequence
 
@@ -170,6 +170,28 @@ def minimum_detectable_effect(
     return _power_factor(alpha, power) * difference_sd / sqrt(items)
 
 
+def _item_group_key(value: Any, index: int, item_field: str) -> tuple[str, Any]:
+    """Hashable, type-preserving grouping key for one row's item identifier.
+
+    Reading the identifier as text would merge distinct ids such as ``1`` and
+    ``"1"`` into one statistical unit and accept a missing id as the valid item
+    ``"None"``, so the type is kept and empty identifiers are refused instead.
+    """
+    if value is None or (isinstance(value, float) and isnan(value)):
+        raise ValueError(f"Record {index} has an empty {item_field}")
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            raise ValueError(f"Record {index} has an empty {item_field}")
+    try:
+        hash(value)
+    except TypeError:
+        raise ValueError(
+            f"Record {index} has a {item_field} that cannot identify an item: {value!r}"
+        ) from None
+    return type(value).__name__, value
+
+
 def paired_run_outcomes(
     records: Sequence[Mapping[str, Any]],
     *,
@@ -189,12 +211,14 @@ def paired_run_outcomes(
     would then rest on different amounts of evidence.
 
     Every row must name its run, but rows naming a third run are ignored and
-    their other fields are never read.
+    their other fields are never read. Item identifiers keep their type, so
+    distinct ids never merge into one item, and a row without an identifier is
+    refused rather than grouped under an empty one.
     """
     if run_a == run_b:
         raise ValueError("Compared run ids must be different")
-    grouped: dict[str, dict[str, list[float]]] = {}
-    order: list[str] = []
+    grouped: dict[tuple[str, Any], dict[str, list[float]]] = {}
+    order: list[tuple[str, Any]] = []
     for index, record in enumerate(records):
         if run_field not in record:
             raise ValueError(f"Record {index} is missing columns: {run_field}")
@@ -207,19 +231,20 @@ def paired_run_outcomes(
         missing = [field for field in (item_field, outcome_field) if field not in record]
         if missing:
             raise ValueError(f"Record {index} is missing columns: {', '.join(missing)}")
-        item = str(record[item_field])
-        if item not in grouped:
-            grouped[item] = {run_a: [], run_b: []}
-            order.append(item)
-        grouped[item][run].append(
+        key = _item_group_key(record[item_field], index, item_field)
+        if key not in grouped:
+            grouped[key] = {run_a: [], run_b: []}
+            order.append(key)
+        grouped[key][run].append(
             1.0 if normalize_binary_label(record[outcome_field]) == "Pass" else 0.0
         )
 
     items = []
     excluded = []
-    for item in order:
-        values_a = grouped[item][run_a]
-        values_b = grouped[item][run_b]
+    for key in order:
+        item = key[1]
+        values_a = grouped[key][run_a]
+        values_b = grouped[key][run_b]
         if not values_a or not values_b:
             excluded.append(item)
             continue
@@ -249,7 +274,9 @@ def paired_run_outcomes(
         "items": items,
         "item_differences": item_differences,
         "paired_values": [(item["values_a"], item["values_b"]) for item in items],
-        "rows": sum(item["runs"] for item in items),
+        # Input rows the comparison kept, counting both runs of every paired
+        # item, because one row carries one run's outcome for one item.
+        "rows": sum(2 * item["runs"] for item in items),
         "item_pass_rates_a": [item["pass_rate_a"] for item in items],
         "item_pass_rates_b": [item["pass_rate_b"] for item in items],
         # One signed observation per item, so correlated repeats of the same

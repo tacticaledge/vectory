@@ -120,7 +120,8 @@ def test_compare_paired_runs_reports_item_level_uncertainty():
     )
 
     assert report["items"] == 6
-    assert report["paired_rows"] == 12
+    # Six paired items with two repeats per run kept 24 input rows.
+    assert report["paired_rows"] == 24
     assert report["excluded_unpaired_items"] == 1
     assert report["runs_per_item_min"] == report["runs_per_item_max"] == 2
     assert report["mean_difference"] == pytest.approx(2.0 / 6)
@@ -247,6 +248,72 @@ def test_pass_rates_match_the_mean_difference_under_uneven_repeat_counts():
     assert report["pass_rate_a"] - report["pass_rate_b"] == pytest.approx(
         report["mean_difference"]
     )
+
+
+def test_paired_rows_counts_every_retained_row_of_both_runs():
+    outcomes = {
+        "item-1": (["Pass", "Pass"], ["Fail", "Fail"]),
+        "item-2": (["Pass"], ["Fail"]),
+        "item-3": (["Fail"], ["Pass"]),
+    }
+    records = paired_records(outcomes)
+    # Rows only one run covered are excluded, so they never reach the count.
+    records.append({"item_id": "item-4", "run_id": "candidate", "judge_label": "Pass"})
+
+    report = compare_paired_runs(
+        records, run_a="candidate", run_b="baseline", iterations=200
+    )
+
+    assert report["paired_rows"] == 8
+    assert report["excluded_unpaired_items"] == 1
+
+
+def test_distinct_item_identifiers_are_not_merged_by_their_text_form():
+    # The integer 1 and the string "1" name different items, and reading both
+    # as text would fuse them into a single paired unit.
+    records = [
+        {"item_id": 1, "run_id": "candidate", "judge_label": "Pass"},
+        {"item_id": 1, "run_id": "baseline", "judge_label": "Fail"},
+        {"item_id": "1", "run_id": "candidate", "judge_label": "Fail"},
+        {"item_id": "1", "run_id": "baseline", "judge_label": "Pass"},
+    ]
+
+    outcomes = paired_run_outcomes(records, run_a="candidate", run_b="baseline")
+
+    assert [item["item_id"] for item in outcomes["items"]] == [1, "1"]
+    assert outcomes["item_differences"] == [1.0, -1.0]
+    assert outcomes["rows"] == 4
+
+
+def test_rows_without_an_item_identifier_are_refused():
+    paired = paired_records({"item-1": (["Pass"], ["Fail"]), "item-2": (["Fail"], ["Pass"])})
+    for broken in ({"item_id": None}, {"item_id": "  "}, {"item_id": float("nan")}):
+        with pytest.raises(ValueError, match="empty item_id"):
+            paired_run_outcomes(
+                [*paired, {"run_id": "candidate", "judge_label": "Pass", **broken}],
+                run_a="candidate",
+                run_b="baseline",
+            )
+    with pytest.raises(ValueError, match="cannot identify an item"):
+        paired_run_outcomes(
+            [*paired, {"item_id": ["item-1"], "run_id": "candidate", "judge_label": "Pass"}],
+            run_a="candidate",
+            run_b="baseline",
+        )
+
+
+def test_item_identifiers_are_matched_after_trimming_surrounding_space():
+    records = [
+        {"item_id": "item-1", "run_id": "candidate", "judge_label": "Pass"},
+        {"item_id": " item-1 ", "run_id": "baseline", "judge_label": "Fail"},
+        {"item_id": "item-2", "run_id": "candidate", "judge_label": "Fail"},
+        {"item_id": "item-2", "run_id": "baseline", "judge_label": "Pass"},
+    ]
+
+    outcomes = paired_run_outcomes(records, run_a="candidate", run_b="baseline")
+
+    assert [item["item_id"] for item in outcomes["items"]] == ["item-1", "item-2"]
+    assert outcomes["excluded_unpaired_items"] == []
 
 
 def test_compare_paired_runs_refuses_unusable_pairings():

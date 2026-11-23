@@ -91,7 +91,7 @@ vectory compare-runs run-outcomes.jsonl \
 ```
 
 ```text
-Items: n=12, paired rows=24, runs per item=2-2
+Items: n=12, paired rows=48, runs per item=2-2
 Mean difference: 0.3333, 95% CI=[0.0833, 0.5833]
 Exact paired sign test p-value: 0.125000 (items favoring candidate-v2=6, baseline-v1=1)
 Standard error: clustered=0.1421, row-level=0.1153, design effect=1.52

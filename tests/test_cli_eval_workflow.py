@@ -1269,7 +1269,8 @@ def test_compare_runs_reports_paired_difference_and_power(tmp_path, capsys):
     ) == 0
 
     output = capsys.readouterr().out
-    assert "Items: n=12, paired rows=24, runs per item=2-2" in output
+    # The fixture ships 48 rows, every one of them paired and retained.
+    assert "Items: n=12, paired rows=48, runs per item=2-2" in output
     assert "Mean difference: 0.3333, 95% CI=[" in output
     assert "Exact paired sign test p-value: 0.125000" in output
     assert "needs n=" in output
@@ -1309,7 +1310,7 @@ def test_compare_runs_matches_the_documented_example_output(capsys):
 
     output = capsys.readouterr().out
     for line in (
-        "Items: n=12, paired rows=24, runs per item=2-2",
+        "Items: n=12, paired rows=48, runs per item=2-2",
         "Mean difference: 0.3333, 95% CI=[0.0833, 0.5833]",
         "Exact paired sign test p-value: 0.125000 "
         "(items favoring candidate-v2=6, baseline-v1=1)",

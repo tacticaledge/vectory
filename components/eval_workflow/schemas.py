@@ -226,7 +226,8 @@ class PairedPowerPlan(StrictModel):
 
 class PairedComparison(StrictModel):
     items: int = Field(ge=2)
-    paired_rows: int = Field(ge=2)
+    # Rows of both runs, so the two paired items a comparison needs are 4 rows.
+    paired_rows: int = Field(ge=4)
     runs_per_item_min: int = Field(ge=1)
     runs_per_item_max: int = Field(ge=1)
     excluded_unpaired_items: int = Field(ge=0)
