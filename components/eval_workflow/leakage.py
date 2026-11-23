@@ -28,10 +28,8 @@ def normalize_leakage_text(value: Any) -> str:
     if isinstance(value, str):
         text = value
     else:
-        text = _ESCAPED_WHITESPACE.sub(
-            " ", json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
-        )
-    return _WHITESPACE.sub(" ", text).strip().casefold()
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return _WHITESPACE.sub(" ", _ESCAPED_WHITESPACE.sub(" ", text)).strip().casefold()
 
 
 def _search_variants(text: str) -> tuple[str, ...]:

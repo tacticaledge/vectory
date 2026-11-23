@@ -380,10 +380,11 @@ def test_leakage_check_matches_quoted_and_backslashed_record_text():
     assert report["matches"][0]["location"] == "expert_examples[1].input"
 
 
-def test_leakage_check_matches_quoted_record_text_inside_the_prompt():
+@pytest.mark.parametrize("separator", [" ", "\n", "\t", "\r", "\f", "\v"])
+def test_leakage_check_matches_quoted_record_text_inside_the_prompt(separator):
     records = labeled_split_records()
     evaluator = train_seeded_evaluator(records)
-    quoted = 'The agent replied "we refund any order" without evidence'
+    quoted = 'The agent replied "we refund any order"' + separator + 'without evidence'
     evaluator["prompt"] = evaluator["prompt"].replace(
         "## Trace or output to evaluate",
         f"## Pasted trace\n{json.dumps({'output': quoted}, ensure_ascii=False)}\n\n"
