@@ -13,6 +13,7 @@ from .schemas import (
     dump_evaluator_definition,
     parse_evaluator_definition,
 )
+from .validation import normalize_binary_label
 
 
 def _slugify(value: str) -> str:
@@ -25,6 +26,89 @@ def _example_texts(failure_mode: Mapping[str, Any]) -> list[str]:
     if isinstance(examples, str):
         examples = [examples]
     return [str(example).strip() for example in examples if str(example).strip()]
+
+
+def _has_content(value: Any) -> bool:
+    """Report whether a record value carries text a judge example could show."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (Mapping, Sequence, set, frozenset)):
+        return len(value) > 0
+    return True
+
+
+def _example_input(
+    record: Mapping[str, Any], fields: Sequence[str], index: int
+) -> dict[str, Any]:
+    """Collect the declared input fields a record actually carries.
+
+    Absent fields are dropped so an optional column does not block promotion, but a
+    record carrying none of them would become a content-free example that teaches the
+    judge nothing, so it is rejected instead of silently promoted.
+    """
+    values = {field: record[field] for field in fields if field in record}
+    if not any(_has_content(value) for value in values.values()):
+        raise ValueError(
+            f"Train split record {index} carries no content in any requested input "
+            f"field: {', '.join(fields)}"
+        )
+    return values
+
+
+def train_split_expert_examples(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    input_fields: Sequence[str],
+    label_field: str,
+    critique_field: str,
+    id_field: str = "id",
+    limit_per_class: int = 4,
+) -> list[dict[str, Any]]:
+    """Select balanced judge examples from the train split only.
+
+    Drawing examples from the train partition keeps dev and test records out of the
+    evaluator definition, so later validation measures the judge on text it never saw.
+    Records without an expert critique are skipped, because an example without the
+    reasoning behind its verdict cannot teach the judge. A critiqued record that
+    carries none of the requested input fields is rejected rather than promoted into
+    an example with an empty input. The critiqued records must cover both verdicts, so
+    a promoted evaluator always carries Pass and Fail examples.
+    """
+    if limit_per_class < 1:
+        raise ValueError("At least one example per class is required")
+    fields = list(dict.fromkeys(input_fields))
+    if not fields:
+        raise ValueError("At least one input field is required to build judge examples")
+    grouped: dict[str, list[dict[str, Any]]] = {"Fail": [], "Pass": []}
+    for index, record in enumerate(records):
+        if label_field not in record:
+            raise ValueError(f"Train split record {index} is missing the label field: {label_field}")
+        critique = str(record.get(critique_field) or "").strip()
+        if not critique:
+            continue
+        result = normalize_binary_label(record[label_field])
+        source = record.get(id_field)
+        grouped[result].append(
+            {
+                "source_id": f"train:{source if source is not None else index}",
+                "input": _example_input(record, fields, index),
+                "critique": critique,
+                "result": result,
+            }
+        )
+    examples = [*grouped["Fail"][:limit_per_class], *grouped["Pass"][:limit_per_class]]
+    if not examples:
+        raise ValueError(
+            f"No train split record carries a non-empty {critique_field!r} critique"
+        )
+    if {example["result"] for example in examples} != {"Pass", "Fail"}:
+        raise ValueError(
+            "Train split needs at least one critiqued Pass record and one critiqued "
+            "Fail record, because a judge taught only one verdict cannot be validated"
+        )
+    return examples
 
 
 def validate_evaluator_definition(

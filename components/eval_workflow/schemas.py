@@ -132,6 +132,30 @@ class SplitProvenance(StrictModel):
     record_count: int = Field(ge=1)
 
 
+class LeakageMatch(StrictModel):
+    split: str = Field(min_length=1)
+    record_index: int = Field(ge=0)
+    record_id: str | None = None
+    field: str = Field(min_length=1)
+    location: str = Field(min_length=1)
+    characters: int = Field(ge=1)
+
+
+class LeakageReport(StrictModel):
+    schema_version: Literal["1.0"]
+    evaluator_id: str = Field(min_length=1)
+    checked_splits: dict[str, int]
+    text_fields: list[str] = Field(min_length=1)
+    records_with_field: dict[str, int]
+    compared_texts: dict[str, int]
+    fields_without_records: list[str] = Field(default_factory=list)
+    minimum_characters: int = Field(ge=1)
+    skipped_short_texts: int = Field(ge=0)
+    matches: list[LeakageMatch] = Field(default_factory=list)
+    leaked_records: int = Field(ge=0)
+    clean: bool
+
+
 class GroupValidationReport(StrictModel):
     dimensions: dict[str, str]
     metrics: BinaryClassificationMetrics
@@ -152,6 +176,7 @@ class JudgeValidationReport(StrictModel):
     groups: list[GroupValidationReport] = Field(default_factory=list)
     gate_blockers: list[str] = Field(default_factory=list)
     labels_sha256: str | None = None
+    leakage: LeakageReport | None = None
 
 
 class SuccessRateEstimate(StrictModel):
