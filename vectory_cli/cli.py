@@ -314,8 +314,23 @@ def run_promote(args: argparse.Namespace) -> int:
         raise ValueError(f"Unknown failure mode {args.failure_mode!r}. Available modes: {available}")
     fields = args.input_fields or ["input", "output", "reference", "trace"]
     if args.train_split:
+        if not args.split_manifest:
+            raise ValueError("--train-split requires --split-manifest")
+        manifest = json.loads(args.split_manifest.read_text(encoding="utf-8"))
+        if manifest.get("schema_version") != "1.0" or manifest.get("label_column") != args.train_label_column:
+            raise ValueError("Train label column must match a version 1.0 split manifest")
+        artifact = (manifest.get("artifacts") or {}).get("train")
+        if not isinstance(artifact, dict) or not isinstance(artifact.get("path"), str):
+            raise ValueError("Split manifest does not describe a train artifact")
+        if args.train_split.resolve() != (args.split_manifest.parent / artifact["path"]).resolve():
+            raise ValueError("--train-split must name the manifest's train artifact")
+        records = _load_records(args.train_split)
+        _verify_split_artifact("train", artifact, records, manifest.get("judge_label_column"))
+        # Unlike held-out predictions, every train field consumed by promotion is immutable.
+        if artifact.get("records_sha256") != _records_sha256(records):
+            raise ValueError("Train records do not match the complete split manifest fingerprint")
         expert_examples = train_split_expert_examples(
-            _load_records(args.train_split),
+            records,
             input_fields=fields,
             label_field=args.train_label_column,
             critique_field=args.train_critique_column,
@@ -884,6 +899,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="human_label",
         help="Pass/Fail label column in the train split. Default: human_label.",
     )
+    promote_parser.add_argument("--split-manifest", type=Path, help="Required provenance manifest when --train-split is supplied.")
     promote_parser.add_argument(
         "--train-critique-column",
         default="critique",

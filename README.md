@@ -53,6 +53,7 @@ vectory split-labels judge-labels.jsonl \
   --out judge-splits
 vectory promote eval-review "Unsupported claim" \
   --errors-reviewed \
+  --split-manifest judge-splits/split_manifest.json \
   --train-split judge-splits/train.jsonl
 vectory check-leakage eval-review/evaluators/failure-unsupported-claim.json \
   --split-manifest judge-splits/split_manifest.json

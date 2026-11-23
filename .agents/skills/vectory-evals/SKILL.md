@@ -25,7 +25,7 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
 4. If the workspace has an accepted failure mode, create a focused evaluator:
 
-   `vectory promote WORKSPACE "FAILURE MODE" --errors-reviewed --train-split SPLITS/train.jsonl`
+   `vectory promote WORKSPACE "FAILURE MODE" --errors-reviewed --train-split SPLITS/train.jsonl --split-manifest SPLITS/split_manifest.json`
 
    Drawing examples from the train split keeps dev and test records out of the definition. Every train record needs the Pass/Fail label, only records carrying an expert critique become examples, those critiqued records must cover both verdicts, and each must carry content in at least one requested input field. Without `--train-split`, examples come from the first workspace annotations, which may later land in dev or test. Prefer one binary evaluator per failure mode. Treat every promoted evaluator as `draft_unvalidated`.
 

@@ -80,6 +80,7 @@ By default the examples come from the first annotations in the workspace, which 
 ```bash
 vectory promote eval-review "Unsupported claim" \
   --errors-reviewed \
+  --split-manifest judge-splits/split_manifest.json \
   --train-split judge-splits/train.jsonl \
   --train-label-column human_label \
   --train-critique-column critique

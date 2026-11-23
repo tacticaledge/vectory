@@ -214,6 +214,8 @@ def test_promote_draws_examples_from_the_train_split(tmp_path):
             "--errors-reviewed",
             "--train-split",
             str(split_dir / "train.jsonl"),
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
             "--input-fields",
             "input",
             "output",
@@ -240,6 +242,30 @@ def test_promote_draws_examples_from_the_train_split(tmp_path):
     ) == 0
 
 
+@pytest.mark.parametrize("source", ["dev", "test", "arbitrary", "altered", "extra-field", "missing-manifest"])
+def test_promote_requires_the_manifest_train_artifact(tmp_path, source, capsys):
+    split_dir, _, workspace = _text_split_fixture(tmp_path)
+    train = split_dir / "train.jsonl"
+    if source in {"dev", "test"}:
+        train = split_dir / f"{source}.jsonl"
+    elif source == "arbitrary":
+        copy = split_dir / "arbitrary.jsonl"
+        copy.write_text(train.read_text())
+        train = copy
+    elif source in {"altered", "extra-field"}:
+        records = [json.loads(line) for line in train.read_text().splitlines()]
+        records[0]["input" if source == "altered" else "unverified"] = "Unverified content"
+        write_jsonl(train, records)
+    arguments = ["promote", str(workspace), "Unsupported claim", "--train-split", str(train)]
+    if source != "missing-manifest":
+        arguments += ["--split-manifest", str(split_dir / "split_manifest.json")]
+    with pytest.raises(SystemExit) as error:
+        main(arguments)
+    assert error.value.code == 2
+    assert "manifest" in capsys.readouterr().err
+    assert not (workspace / "evaluators" / "failure-unsupported-claim.json").exists()
+
+
 def test_promote_rejects_a_single_verdict_train_split(tmp_path):
     split_dir, _, workspace = _text_split_fixture(tmp_path)
     train_path = split_dir / "train.jsonl"
@@ -258,6 +284,8 @@ def test_promote_rejects_a_single_verdict_train_split(tmp_path):
                 "--errors-reviewed",
                 "--train-split",
                 str(train_path),
+                "--split-manifest",
+                str(split_dir / "split_manifest.json"),
                 "--input-fields",
                 "input",
                 "output",
@@ -279,6 +307,8 @@ def test_promote_rejects_a_train_split_without_the_requested_input_fields(tmp_pa
                 "--errors-reviewed",
                 "--train-split",
                 str(split_dir / "train.jsonl"),
+                "--split-manifest",
+                str(split_dir / "split_manifest.json"),
                 "--input-fields",
                 "question",
                 "context",
@@ -341,6 +371,8 @@ def test_check_leakage_rejects_an_edited_held_out_record(tmp_path):
             "--errors-reviewed",
             "--train-split",
             str(split_dir / "train.jsonl"),
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
             "--input-fields",
             "input",
             "output",
@@ -455,6 +487,8 @@ def test_check_leakage_fails_when_every_compared_text_is_too_short(tmp_path, cap
             "--errors-reviewed",
             "--train-split",
             str(split_dir / "train.jsonl"),
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
             "--input-fields",
             "input",
             "output",
@@ -498,6 +532,8 @@ def test_check_leakage_fails_when_no_compared_field_exists(tmp_path, capsys):
             "--errors-reviewed",
             "--train-split",
             str(split_dir / "train.jsonl"),
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
             "--input-fields",
             "input",
             "output",
@@ -538,6 +574,8 @@ def test_validate_judge_blocks_a_leakage_check_that_compared_nothing(tmp_path, c
             "--errors-reviewed",
             "--train-split",
             str(split_dir / "train.jsonl"),
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
             "--input-fields",
             "input",
             "output",
@@ -643,6 +681,8 @@ def test_validate_judge_accepts_an_evaluator_seeded_from_train(tmp_path):
             "--errors-reviewed",
             "--train-split",
             str(split_dir / "train.jsonl"),
+            "--split-manifest",
+            str(split_dir / "split_manifest.json"),
             "--input-fields",
             "input",
             "output",
