@@ -16,10 +16,11 @@ def exact_mcnemar_p_value(discordant_a_only: int, discordant_b_only: int) -> flo
     """Two-sided exact McNemar p-value from the discordant cells of a paired table.
 
     Concordant pairs carry no information about which run is better, so the test
-    reads only the cells where the runs disagree. Under the null those pairs
-    split evenly, giving ``p = 2 * P(X <= min(b, c))`` for
-    ``X ~ Binomial(b + c, 0.5)``, clipped at 1.0 because doubling a tail above
-    one half overshoots.
+    reads only the cells where the runs disagree. The counts must come from
+    independent paired units, which under repeated sampling means items rather
+    than rows. Under the null those pairs split evenly, giving
+    ``p = 2 * P(X <= min(b, c))`` for ``X ~ Binomial(b + c, 0.5)``, clipped at
+    1.0 because doubling a tail above one half overshoots.
     """
     if discordant_a_only < 0 or discordant_b_only < 0:
         raise ValueError("Discordant pair counts must not be negative")
@@ -85,11 +86,40 @@ def clustered_standard_error(item_differences: Sequence[float]) -> float:
     return sqrt(variance(item_differences) / len(item_differences))
 
 
-def naive_standard_error(row_differences: Sequence[float]) -> float:
-    """Row-level standard error that treats every repeated run as independent."""
-    if len(row_differences) < 2:
+def naive_standard_error(
+    paired_values: Sequence[tuple[Sequence[float], Sequence[float]]],
+) -> float:
+    """Row-level standard error that treats every repeated run as independent.
+
+    The repeats of one item are exchangeable, so no pairing of one run's repeats
+    with the other's is privileged: the spread is averaged over every within-item
+    pairing, which keeps the estimate independent of row order, and the row
+    count rather than the larger pair count sets the sample size. With one row
+    per run per item this is the ordinary paired standard error, so the design
+    effect of unrepeated data is 1.
+    """
+    for values_a, values_b in paired_values:
+        if len(values_a) != len(values_b):
+            raise ValueError("Each item must carry the same number of rows per run")
+    paired = [(values_a, values_b) for values_a, values_b in paired_values if values_a]
+    rows = sum(len(values_a) for values_a, _ in paired)
+    if rows < 2:
         raise ValueError("At least two paired rows are required")
-    return sqrt(variance(row_differences) / len(row_differences))
+    mean = (
+        sum(
+            len(values_a) * (fmean(values_a) - fmean(values_b))
+            for values_a, values_b in paired
+        )
+        / rows
+    )
+    total = 0.0
+    for values_a, values_b in paired:
+        total += sum(
+            (value_a - value_b - mean) ** 2
+            for value_a in values_a
+            for value_b in values_b
+        ) / len(values_a)
+    return sqrt(total / (rows - 1) / rows)
 
 
 def _power_factor(alpha: float, power: float) -> float:
@@ -145,11 +175,14 @@ def paired_run_outcomes(
     run_field: str = "run_id",
     outcome_field: str = "judge_label",
 ) -> dict[str, Any]:
-    """Pair two runs row by row inside every item of a repeated-sampling dataset.
+    """Pair two runs item by item in a repeated-sampling dataset.
 
-    Items carrying rows from only one run are excluded instead of compared
-    against nothing, and an item whose two runs have different repeat counts is
-    refused, because the pairing would then be arbitrary.
+    The item, not the row, is the paired unit: repeats collapse into the item's
+    pass-rate difference, so results never depend on which repeat of one run a
+    row happens to sit next to in the file. Items carrying rows from only one
+    run are excluded instead of compared against nothing, and an item whose two
+    runs have different repeat counts is refused, because the two pass rates
+    would then rest on different amounts of evidence.
     """
     if run_a == run_b:
         raise ValueError("Compared run ids must be different")
@@ -186,28 +219,33 @@ def paired_run_outcomes(
                 f"{len(values_b)} {run_b} rows; paired comparison requires the "
                 "same number of repeated runs per item"
             )
-        differences = [value_a - value_b for value_a, value_b in zip(values_a, values_b)]
+        pass_rate_a = fmean(values_a)
+        pass_rate_b = fmean(values_b)
         items.append(
             {
                 "item_id": item,
-                "runs": len(differences),
+                "runs": len(values_a),
                 "values_a": values_a,
                 "values_b": values_b,
-                "differences": differences,
-                "mean_difference": fmean(differences),
+                "pass_rate_a": pass_rate_a,
+                "pass_rate_b": pass_rate_b,
+                "mean_difference": pass_rate_a - pass_rate_b,
             }
         )
     if not items:
         raise ValueError(f"No item carries rows from both {run_a} and {run_b}")
-    row_differences = [difference for item in items for difference in item["differences"]]
+    item_differences = [item["mean_difference"] for item in items]
     return {
         "items": items,
-        "item_differences": [item["mean_difference"] for item in items],
-        "row_differences": row_differences,
-        "values_a": [value for item in items for value in item["values_a"]],
-        "values_b": [value for item in items for value in item["values_b"]],
-        "discordant_a_only": sum(1 for difference in row_differences if difference > 0),
-        "discordant_b_only": sum(1 for difference in row_differences if difference < 0),
+        "item_differences": item_differences,
+        "paired_values": [(item["values_a"], item["values_b"]) for item in items],
+        "rows": sum(item["runs"] for item in items),
+        "item_pass_rates_a": [item["pass_rate_a"] for item in items],
+        "item_pass_rates_b": [item["pass_rate_b"] for item in items],
+        # One discordant observation per item, so correlated repeats of the same
+        # item never count as separate evidence in the McNemar test.
+        "discordant_a_only": sum(1 for difference in item_differences if difference > 0),
+        "discordant_b_only": sum(1 for difference in item_differences if difference < 0),
         "excluded_unpaired_items": excluded,
     }
 
@@ -226,7 +264,13 @@ def compare_paired_runs(
     power: float = 0.8,
     target_effect: float | None = None,
 ) -> dict[str, Any]:
-    """Compare two runs on the same items with a paired test, interval, and plan."""
+    """Compare two runs on the same items with a paired test, interval, and plan.
+
+    Every statistic is item-level: the interval resamples items, the standard
+    error clusters on items, and the McNemar test counts one discordant
+    observation per item. Repeated runs of one item therefore sharpen that
+    item's estimate without passing for extra independent evidence.
+    """
     outcomes = paired_run_outcomes(
         records,
         run_a=run_a,
@@ -238,19 +282,20 @@ def compare_paired_runs(
     item_differences = outcomes["item_differences"]
     if len(item_differences) < 2:
         raise ValueError("At least two paired items are required to compare two runs")
-    row_differences = outcomes["row_differences"]
     clustered = clustered_standard_error(item_differences)
-    naive = naive_standard_error(row_differences)
+    naive = naive_standard_error(outcomes["paired_values"])
     difference_sd = sqrt(variance(item_differences))
     runs_per_item = [item["runs"] for item in outcomes["items"]]
     return {
         "items": len(item_differences),
-        "paired_rows": len(row_differences),
+        "paired_rows": outcomes["rows"],
         "runs_per_item_min": min(runs_per_item),
         "runs_per_item_max": max(runs_per_item),
         "excluded_unpaired_items": len(outcomes["excluded_unpaired_items"]),
-        "pass_rate_a": fmean(outcomes["values_a"]),
-        "pass_rate_b": fmean(outcomes["values_b"]),
+        # Item-weighted like the difference below, so the reported delta is the
+        # difference of the two pass rates even when repeat counts vary by item.
+        "pass_rate_a": fmean(outcomes["item_pass_rates_a"]),
+        "pass_rate_b": fmean(outcomes["item_pass_rates_b"]),
         "mean_difference": fmean(item_differences),
         "confidence_interval_95": paired_bootstrap_interval(
             item_differences, iterations=iterations, seed=seed
@@ -263,7 +308,7 @@ def compare_paired_runs(
         # report a narrower interval than the data supports.
         "design_effect": (clustered / naive) ** 2 if naive else 1.0,
         "mcnemar": {
-            "paired_rows": len(row_differences),
+            "paired_items": len(item_differences),
             "discordant_a_only": outcomes["discordant_a_only"],
             "discordant_b_only": outcomes["discordant_b_only"],
             "p_value": exact_mcnemar_p_value(

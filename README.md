@@ -93,11 +93,11 @@ vectory compare-runs data/example_paired_runs.jsonl \
 ```text
 Items: n=12, paired rows=24, runs per item=2-2
 Mean difference: 0.3333, 95% CI=[0.0833, 0.5833]
-McNemar exact p-value: 0.021484 (discordant candidate-v2-only=9, baseline-v1-only=1)
+McNemar exact p-value: 0.125000 (discordant items candidate-v2-only=6, baseline-v1-only=1)
 Standard error: clustered=0.1421, row-level=0.1153, design effect=1.52
 ```
 
-The comparison pairs the runs item by item, so it reports the mean per-item difference with a 95% bootstrap interval, the exact McNemar p-value on the discordant pairs, an item-level clustered standard error that accounts for repeated runs of the same item, and how many paired items a target effect would need.
+The comparison pairs the runs item by item, so it reports the mean per-item difference with a 95% bootstrap interval, the exact McNemar p-value on the items the two runs disagree on, an item-level clustered standard error that accounts for repeated runs of the same item, and how many paired items a target effect would need. Repeated runs of one item count as one paired observation throughout, so repetition sharpens that item's estimate without passing for extra independent evidence.
 
 See the [human-grounded evaluation workflow](docs/evaluation_workflow.md) for the app flow, artifact schema, validation metrics, and CI behavior.
 

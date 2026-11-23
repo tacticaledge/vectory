@@ -1271,18 +1271,20 @@ def test_compare_runs_reports_paired_difference_and_power(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "Items: n=12, paired rows=24, runs per item=2-2" in output
     assert "Mean difference: 0.3333, 95% CI=[" in output
-    assert "McNemar exact p-value: 0.021484" in output
+    assert "McNemar exact p-value: 0.125000" in output
     assert "needs n=" in output
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     comparison = report["comparison"]
     assert report["run_a"] == "candidate-v2"
     assert comparison["items"] == 12
+    # One discordant observation per item, not per repeated row: the 24 rows of
+    # 12 items cannot stand in for 24 independent paired observations.
     assert comparison["mcnemar"] == {
-        "paired_rows": 24,
-        "discordant_a_only": 9,
+        "paired_items": 12,
+        "discordant_a_only": 6,
         "discordant_b_only": 1,
-        "p_value": 22 / 1024,
+        "p_value": 16 / 128,
     }
     assert comparison["confidence_interval_95"][0] > 0
     assert comparison["clustered_standard_error"] > comparison["naive_standard_error"]

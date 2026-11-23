@@ -59,7 +59,7 @@ def test_clustered_standard_error_exceeds_row_level_under_within_item_correlatio
     outcomes = paired_run_outcomes(paired_records(correlated), run_a="candidate", run_b="baseline")
 
     clustered = clustered_standard_error(outcomes["item_differences"])
-    row_level = naive_standard_error(outcomes["row_differences"])
+    row_level = naive_standard_error(outcomes["paired_values"])
 
     assert clustered > row_level
     single = paired_run_outcomes(
@@ -67,8 +67,8 @@ def test_clustered_standard_error_exceeds_row_level_under_within_item_correlatio
         run_a="candidate",
         run_b="baseline",
     )
-    assert clustered_standard_error(single["item_differences"]) == naive_standard_error(
-        single["row_differences"]
+    assert clustered_standard_error(single["item_differences"]) == pytest.approx(
+        naive_standard_error(single["paired_values"])
     )
 
 
@@ -108,15 +108,91 @@ def test_compare_paired_runs_reports_item_level_uncertainty():
     assert report["mean_difference"] == pytest.approx(2.0 / 6)
     assert report["pass_rate_a"] == pytest.approx(9 / 12)
     assert report["pass_rate_b"] == pytest.approx(5 / 12)
-    assert report["mcnemar"]["discordant_a_only"] == 5
+    assert report["mcnemar"]["paired_items"] == 6
+    assert report["mcnemar"]["discordant_a_only"] == 3
     assert report["mcnemar"]["discordant_b_only"] == 1
-    assert report["mcnemar"]["p_value"] == pytest.approx(exact_mcnemar_p_value(5, 1))
+    assert report["mcnemar"]["p_value"] == pytest.approx(exact_mcnemar_p_value(3, 1))
     assert report["clustered_standard_error"] > report["naive_standard_error"]
     assert report["design_effect"] > 1
     assert report["power"]["required_items"] == required_sample_size(
         0.1, report["power"]["item_difference_sd"]
     )
     assert report["power"]["minimum_detectable_effect"] > 0
+
+
+def test_compare_paired_runs_ignores_row_order_within_an_item():
+    # Both datasets hold the same outcomes per item; only the order of one
+    # item's rows differs, which must not move any reported statistic.
+    ordered = {
+        "item-1": (["Pass", "Fail"], ["Pass", "Fail"]),
+        "item-2": (["Pass", "Pass"], ["Pass", "Fail"]),
+        "item-3": (["Pass", "Fail"], ["Pass", "Fail"]),
+    }
+    shuffled = dict(ordered)
+    shuffled["item-1"] = (["Pass", "Fail"], ["Fail", "Pass"])
+    shuffled["item-3"] = (["Fail", "Pass"], ["Pass", "Fail"])
+
+    first = compare_paired_runs(
+        paired_records(ordered), run_a="candidate", run_b="baseline", iterations=200
+    )
+    second = compare_paired_runs(
+        paired_records(shuffled), run_a="candidate", run_b="baseline", iterations=200
+    )
+
+    assert first == second
+
+
+def test_repeating_every_item_does_not_strengthen_the_mcnemar_evidence():
+    outcomes = {
+        "item-1": (["Pass"], ["Fail"]),
+        "item-2": (["Pass"], ["Fail"]),
+        "item-3": (["Pass"], ["Fail"]),
+        "item-4": (["Fail"], ["Pass"]),
+        "item-5": (["Pass"], ["Pass"]),
+    }
+    repeated = {
+        item: (values_a * 4, values_b * 4) for item, (values_a, values_b) in outcomes.items()
+    }
+
+    once = compare_paired_runs(
+        paired_records(outcomes), run_a="candidate", run_b="baseline", iterations=200
+    )
+    four_times = compare_paired_runs(
+        paired_records(repeated), run_a="candidate", run_b="baseline", iterations=200
+    )
+
+    assert four_times["paired_rows"] == 4 * once["paired_rows"]
+    assert four_times["mcnemar"] == once["mcnemar"]
+    assert four_times["mcnemar"]["paired_items"] == 5
+    assert four_times["mean_difference"] == once["mean_difference"]
+    assert four_times["clustered_standard_error"] == pytest.approx(
+        once["clustered_standard_error"]
+    )
+    # Row-level inference would have shrunk the standard error by sqrt(4).
+    assert four_times["naive_standard_error"] == pytest.approx(
+        once["naive_standard_error"] / 2, rel=0.2
+    )
+    assert four_times["design_effect"] > 3
+
+
+def test_pass_rates_match_the_mean_difference_under_uneven_repeat_counts():
+    outcomes = {
+        "item-1": (["Pass", "Pass", "Pass", "Fail"], ["Fail", "Fail", "Fail", "Fail"]),
+        "item-2": (["Pass"], ["Fail"]),
+        "item-3": (["Fail"], ["Pass"]),
+    }
+
+    report = compare_paired_runs(
+        paired_records(outcomes), run_a="candidate", run_b="baseline", iterations=200
+    )
+
+    assert report["runs_per_item_min"] == 1
+    assert report["runs_per_item_max"] == 4
+    assert report["pass_rate_a"] == pytest.approx((0.75 + 1.0 + 0.0) / 3)
+    assert report["pass_rate_b"] == pytest.approx((0.0 + 0.0 + 1.0) / 3)
+    assert report["pass_rate_a"] - report["pass_rate_b"] == pytest.approx(
+        report["mean_difference"]
+    )
 
 
 def test_compare_paired_runs_refuses_unusable_pairings():

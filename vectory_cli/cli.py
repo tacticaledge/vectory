@@ -823,7 +823,7 @@ def run_compare_runs(args: argparse.Namespace) -> int:
     )
     print(
         f"McNemar exact p-value: {mcnemar['p_value']:.6f} "
-        f"(discordant {args.run_a}-only={mcnemar['discordant_a_only']}, "
+        f"(discordant items {args.run_a}-only={mcnemar['discordant_a_only']}, "
         f"{args.run_b}-only={mcnemar['discordant_b_only']})"
     )
     print(

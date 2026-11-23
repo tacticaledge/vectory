@@ -208,7 +208,7 @@ class SuccessRateReport(StrictModel):
 
 
 class McNemarResult(StrictModel):
-    paired_rows: int = Field(ge=1)
+    paired_items: int = Field(ge=2)
     discordant_a_only: int = Field(ge=0)
     discordant_b_only: int = Field(ge=0)
     p_value: float = Field(ge=0, le=1)

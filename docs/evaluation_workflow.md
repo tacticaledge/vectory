@@ -184,23 +184,26 @@ vectory compare-runs data/example_paired_runs.jsonl \
   --out run-comparison.json
 ```
 
-Each row names one item, one run, and one binary outcome. Defaults are `item_id`, `run_id`, and `judge_label`; rename them with `--item-column`, `--run-column`, and `--outcome-column`. Rows from other runs are ignored, items that only one run covered are excluded and counted, and an item whose two runs carry different numbers of repeated rows is refused rather than paired arbitrarily.
+Each row names one item, one run, and one binary outcome. Defaults are `item_id`, `run_id`, and `judge_label`; rename them with `--item-column`, `--run-column`, and `--outcome-column`. Rows from other runs are ignored, items that only one run covered are excluded and counted, and an item whose two runs carry different numbers of repeated rows is refused, because its two pass rates would otherwise rest on different amounts of evidence.
+
+The paired unit is the item, never the row. An item's repeats collapse into its pass rate per run, so no row is paired against a particular repeat of the other run and reordering rows inside an item cannot move any reported number.
 
 The report contains:
 
 | Field | Meaning |
 | --- | --- |
+| `pass_rate_a`, `pass_rate_b` | Mean per-item pass rate of each run, so their difference is `mean_difference` |
 | `mean_difference` | Mean per-item difference in pass rate, `run_a` minus `run_b` |
 | `confidence_interval_95` | Percentile bootstrap interval that resamples items, not rows |
-| `mcnemar` | Discordant pair counts and the two-sided exact McNemar p-value |
+| `mcnemar` | Discordant item counts and the two-sided exact McNemar p-value |
 | `clustered_standard_error` | `sqrt(Var(per-item mean difference) / n)` |
 | `naive_standard_error` | Row-level standard error that ignores repetition |
 | `design_effect` | Squared ratio of the two, above 1 when repeats are correlated |
 | `power` | Item difference standard deviation, minimum detectable effect, and required items |
 
-The exact [McNemar test](https://en.wikipedia.org/wiki/McNemar%27s_test) reads only the discordant cells `b` and `c` of the paired table: under the null they split evenly, so `p = 2 * P(X <= min(b, c))` for `X ~ Binomial(b + c, 0.5)`, clipped at 1.0. No normal approximation or continuity correction is involved, so small and lopsided tables stay exact.
+The exact [McNemar test](https://en.wikipedia.org/wiki/McNemar%27s_test) reads only the discordant cells `b` and `c` of the paired table: under the null they split evenly, so `p = 2 * P(X <= min(b, c))` for `X ~ Binomial(b + c, 0.5)`, clipped at 1.0. No normal approximation or continuity correction is involved, so small and lopsided tables stay exact. Each item contributes at most one discordant observation, decided by the sign of its pass-rate difference, and items the two runs tie on carry no information. Counting every repeated row instead would treat correlated repeats as independent evidence and make a handful of items look significant; with one run per item the counts are the ordinary McNemar cells.
 
-Repeated sampling of the same item needs item-level clustering. The repeated runs of one item are correlated, so treating each run as an independent observation understates the standard error; Vectory therefore resamples whole items in the bootstrap and reports the clustered standard error alongside the row-level one it replaces. With one run per item the two are identical and the design effect is 1.
+Repeated sampling of the same item needs item-level clustering. The repeated runs of one item are correlated, so treating each run as an independent observation understates the standard error; Vectory therefore resamples whole items in the bootstrap and reports the clustered standard error alongside the row-level one it replaces. Because repeats are exchangeable, that row-level figure averages over every within-item pairing of the two runs' repeats and divides by the row count. With one run per item the two standard errors are identical and the design effect is 1.
 
 Power planning uses the same item-level variance: `n >= (z_{1-alpha/2} + z_power)^2 * sigma_d^2 / delta^2`. Because the effect enters squared, detecting half the difference costs about four times as many items. Pass `--target-effect` with the difference that would actually change a decision and read `required_items` before running a larger comparison; `minimum_detectable_effect` reports what the current sample can resolve. Tune the plan with `--alpha` and `--power`, and the interval with `--bootstrap-iterations` and `--seed`. The same seed and item ordering reproduce the interval exactly.
 
