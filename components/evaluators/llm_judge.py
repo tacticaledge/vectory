@@ -65,6 +65,15 @@ The result value must be exactly "Pass" or "Fail".
 Do not use a numeric scale."""
 
 
+RUBRIC_RESPONSE_INSTRUCTIONS = """## Instructions
+First write a specific critique grounded in the supplied input, response, reference, and context.
+Then decide each checklist item on its own: met or not met.
+Return a JSON object with exactly two fields, for example:
+{"critique": "detailed explanation", "criteria": [{"id": "item_id", "met": true}]}
+Decide every listed id exactly once and use no other id.
+Do not return an overall score; the weighted score is computed from your checklist."""
+
+
 RUBRIC_EVALUATION_PROMPT = """You are an expert evaluator checking one response against an explicit checklist.
 
 {context}
@@ -77,13 +86,7 @@ RUBRIC_EVALUATION_PROMPT = """You are an expert evaluator checking one response 
 ## Checklist
 {criteria}
 
-## Instructions
-First write a specific critique grounded in the supplied input, response, reference, and context.
-Then decide each checklist item on its own: met or not met.
-Return a JSON object with exactly two fields, for example:
-{{"critique": "detailed explanation", "criteria": [{{"id": "item_id", "met": true}}]}}
-Decide every listed id exactly once and use no other id.
-Do not return an overall score; the weighted score is computed from your checklist."""
+{instructions}"""
 
 
 CRITERIA_TEMPLATES = {
@@ -180,6 +183,14 @@ class LLMJudgeEvaluator(BaseEvaluator):
                 ("{input}", input_text or ""),
             ):
                 prompt = prompt.replace(placeholder, value)
+            if self.decision_mode == "rubric":
+                # A custom prompt replaces the framing, never the checklist: the parser
+                # only scores declared ids, so a prompt without them would return
+                # verdicts that all resolve to "unknown" and leave the row unscored.
+                prompt = (
+                    f"{prompt}\n\n## Checklist\n{render_rubric_checklist(self.rubric)}"
+                    f"\n\n{RUBRIC_RESPONSE_INSTRUCTIONS}"
+                )
             return prompt
 
         context = ""
@@ -204,6 +215,7 @@ class LLMJudgeEvaluator(BaseEvaluator):
                 if self.decision_mode == "rubric"
                 else self.criteria
             ),
+            instructions=RUBRIC_RESPONSE_INSTRUCTIONS,
         )
 
     def _cache_prefix(self) -> str | None:

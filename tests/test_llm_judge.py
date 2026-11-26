@@ -128,6 +128,7 @@ def test_rubric_prompt_asks_for_a_critique_then_one_verdict_per_checklist_id():
     assert "- states_window (weight 3): States the refund window." in prompt
     assert "- cites_policy (weight 1): Cites the policy section." in prompt
     assert prompt.index("critique") < prompt.index('"criteria"')
+    assert '{"critique": "detailed explanation", "criteria": [{"id": "item_id", "met": true}]}' in prompt
     assert "Do not return an overall score" in prompt
 
 
@@ -165,6 +166,18 @@ def test_rubric_judge_requests_the_per_criterion_response_schema():
     assert schema["additionalProperties"] is False
     assert sorted(schema["required"]) == ["criteria", "critique"]
     assert sorted(item["required"]) == ["id", "met"]
+
+
+def test_rubric_custom_prompt_still_carries_the_checklist_and_its_contract():
+    evaluator = make_evaluator("rubric", RUBRIC)
+    evaluator.custom_prompt = "Judge this refund reply.\nInput: {input}\nResponse: {output}"
+
+    prompt = evaluator._build_prompt("A response", input_text="A question")
+
+    assert prompt.startswith("Judge this refund reply.\nInput: A question\nResponse: A response")
+    assert "- states_window (weight 3): States the refund window." in prompt
+    assert "- cites_policy (weight 1): Cites the policy section." in prompt
+    assert "Decide every listed id exactly once and use no other id." in prompt
 
 
 def test_rubric_decision_mode_requires_a_rubric_spec():
