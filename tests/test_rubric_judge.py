@@ -352,6 +352,40 @@ def test_aggregate_rejects_same_shaped_results_from_another_rubric():
         aggregate_rubric_results(RUBRIC, results)
 
 
+def test_aggregate_rejects_a_result_that_omits_a_rubric_criterion():
+    # An omitted criterion would still raise `responses`, understating unknown coverage.
+    result = dict(dataset_results()[0])
+    result["criteria"] = [item for item in result["criteria"] if item["id"] != "next_step"]
+
+    with pytest.raises(ValueError, match="omits rubric criteria: next_step"):
+        aggregate_rubric_results(RUBRIC, [result])
+
+
+def test_aggregate_rejects_a_result_that_repeats_a_criterion():
+    result = dict(dataset_results()[0])
+    states_window = next(item for item in result["criteria"] if item["id"] == "states_window")
+    result["criteria"] = [*result["criteria"], states_window]
+
+    with pytest.raises(ValueError, match="reports criterion 'states_window' more than once"):
+        aggregate_rubric_results(RUBRIC, [result])
+
+
+def test_aggregate_names_the_result_row_that_is_incomplete():
+    results = [*dataset_results()]
+    results[2] = dict(results[2])
+    results[2]["criteria"] = []
+
+    with pytest.raises(ValueError, match="Result 2 omits rubric criteria"):
+        aggregate_rubric_results(RUBRIC, results)
+
+
+def test_unknown_counts_cover_every_response_in_the_report():
+    report = RubricReport.model_validate(aggregate_rubric_results(RUBRIC, dataset_results()))
+
+    for criterion in report.criteria:
+        assert criterion.evaluated + criterion.unknown == report.responses
+
+
 def test_aggregate_rejects_a_result_that_records_no_rubric():
     result = dict(dataset_results()[0])
     del result["rubric_id"]

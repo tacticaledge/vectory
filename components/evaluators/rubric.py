@@ -292,7 +292,9 @@ def aggregate_rubric_results(
     no timestamps, so two runs over the same recorded outputs are byte-identical.
 
     Every result must record the rubric it was scored against, because two rubrics can
-    share criterion ids while weighting or inverting them differently.
+    share criterion ids while weighting or inverting them differently, and must report
+    every criterion exactly once, because a repeated or omitted criterion would count a
+    single response more than once or leave it out of the coverage it reports.
     """
     rubric = parse_rubric_spec(spec)
     tallies = {criterion.id: {MET: 0, NOT_MET: 0, UNKNOWN: 0} for criterion in rubric.criteria}
@@ -311,16 +313,30 @@ def aggregate_rubric_results(
             unparseable += 1
         if result.get("score") is not None:
             scores.append(float(result["score"]))
+        reported: set[str] = set()
         for item in result.get("criteria") or []:
-            tally = tallies.get(str(item.get("id")))
+            identifier = str(item.get("id"))
+            tally = tallies.get(identifier)
             if tally is None:
                 raise ValueError(
                     f"Result criterion {item.get('id')!r} is not part of rubric {rubric.rubric_id}"
                 )
+            if identifier in reported:
+                raise ValueError(
+                    f"Result {index} reports criterion {identifier!r} more than once; "
+                    "a repeated criterion would count one response several times"
+                )
+            reported.add(identifier)
             status = str(item.get("status"))
             if status not in tally:
                 raise ValueError(f"Unsupported criterion status: {item.get('status')!r}")
             tally[status] += 1
+        omitted = [criterion.id for criterion in rubric.criteria if criterion.id not in reported]
+        if omitted:
+            raise ValueError(
+                f"Result {index} omits rubric criteria: {', '.join(omitted)}; "
+                "every criterion must be reported, as unknown, so coverage stays accurate"
+            )
 
     criteria = []
     for criterion in rubric.criteria:

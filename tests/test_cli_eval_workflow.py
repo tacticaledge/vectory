@@ -1307,6 +1307,70 @@ def test_score_rubric_report_is_byte_identical_across_runs(tmp_path):
     assert first.read_bytes() == second.read_bytes()
 
 
+def test_score_rubric_scores_record_malformed_response_diagnostics(tmp_path):
+    responses = tmp_path / "responses.jsonl"
+    write_jsonl(
+        responses,
+        [
+            {
+                "id": "contradicted",
+                "judge_response": json.dumps(
+                    {
+                        "critique": "Contradicts itself on the window and names an item twice.",
+                        "criteria": [
+                            {"id": "states_window", "met": True},
+                            {"id": "states_window", "met": False},
+                            {"id": "cites_policy", "met": True},
+                            {"id": "next_step", "met": True},
+                            {"id": "invents_terms", "met": False},
+                            {"id": "tone", "met": True},
+                            "garbled",
+                        ],
+                    }
+                ),
+            },
+            {
+                "id": "skipped",
+                "judge_response": json.dumps(
+                    {
+                        "critique": "Leaves the next-step item undecided.",
+                        "criteria": [
+                            {"id": "states_window", "met": True},
+                            {"id": "cites_policy", "met": True},
+                            {"id": "invents_terms", "met": False},
+                        ],
+                    }
+                ),
+            },
+        ],
+    )
+    scores_path = tmp_path / "rubric-scores.jsonl"
+
+    assert main(
+        [
+            "score-rubric",
+            str(responses),
+            "--rubric",
+            str(EXAMPLE_RUBRIC),
+            "--scores-out",
+            str(scores_path),
+        ]
+    ) == 0
+
+    contradicted, skipped = [
+        json.loads(line) for line in scores_path.read_text(encoding="utf-8").splitlines()
+    ]
+    # Both rows leave a criterion unknown; only the diagnostics say why.
+    assert contradicted["criteria"]["states_window"] == "unknown"
+    assert contradicted["conflicting_ids"] == ["states_window"]
+    assert contradicted["unexpected_ids"] == ["tone"]
+    assert contradicted["unparsed_entries"] == 1
+    assert skipped["criteria"]["next_step"] == "unknown"
+    assert skipped["conflicting_ids"] == []
+    assert skipped["unexpected_ids"] == []
+    assert skipped["unparsed_entries"] == 0
+
+
 def test_score_rubric_rejects_an_invalid_rubric(tmp_path, capsys):
     rubric_path = tmp_path / "rubric.json"
     rubric_path.write_text(
