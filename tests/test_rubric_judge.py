@@ -224,6 +224,29 @@ def test_an_unusable_response_leaves_every_criterion_unknown_and_unscored(respon
     assert result["parse_error"]
 
 
+@pytest.mark.parametrize("critique", [None, "", "   ", 42])
+def test_a_response_without_a_critique_is_unusable_and_unscored(critique):
+    # The critique is the diagnostic the checklist exists for, so verdicts without one
+    # are not scored and stay out of the judge's reuse cache.
+    payload = {
+        "criteria": [
+            {"id": "states_window", "met": True},
+            {"id": "cites_policy", "met": True},
+            {"id": "next_step", "met": True},
+            {"id": "invents_terms", "met": False},
+        ]
+    }
+    if critique is not None:
+        payload["critique"] = critique
+
+    result = parse_rubric_response(json.dumps(payload), RUBRIC)
+
+    assert result["critique"] is None
+    assert result["parse_error"] == "Rubric judge response has no critique"
+    assert {item["status"] for item in result["criteria"]} == {"unknown"}
+    assert result["score"] is None
+
+
 def test_checklist_prompt_section_lists_every_id_weight_and_penalty():
     checklist = render_rubric_checklist(RUBRIC)
 
@@ -384,6 +407,34 @@ def test_unknown_counts_cover_every_response_in_the_report():
 
     for criterion in report.criteria:
         assert criterion.evaluated + criterion.unknown == report.responses
+
+
+@pytest.mark.parametrize("score", [1.0, 0.0, None])
+def test_aggregate_rejects_a_score_that_contradicts_the_criterion_verdicts(score):
+    # 4 of a possible 6 was actually met; the mean must not restate anything else.
+    result = dict(dataset_results()[1])
+    result["score"] = score
+
+    with pytest.raises(ValueError, match="verdicts weigh out to"):
+        aggregate_rubric_results(RUBRIC, [result])
+
+
+def test_aggregate_rejects_a_non_numeric_score():
+    result = dict(dataset_results()[0])
+    result["score"] = "1.0"
+
+    with pytest.raises(ValueError, match="records a non-numeric score"):
+        aggregate_rubric_results(RUBRIC, [result])
+
+
+def test_aggregate_mean_is_recomputed_from_the_reported_verdicts():
+    results = dataset_results()
+    # A rounded score stays within tolerance, and the mean comes from the verdicts.
+    results[1] = {**results[1], "score": round(4 / 6, 12)}
+
+    report = RubricReport.model_validate(aggregate_rubric_results(RUBRIC, results))
+
+    assert report.mean_score == pytest.approx((1 + 4 / 6 + 0 + 0.6) / 4)
 
 
 def test_aggregate_rejects_a_result_that_records_no_rubric():

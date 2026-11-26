@@ -195,6 +195,11 @@ def _response_verdicts(response_text: str) -> dict[str, Any]:
         return _unusable_response(None, "Rubric judge response is not a JSON object")
     critique = payload.get("critique")
     critique = critique.strip() if isinstance(critique, str) and critique.strip() else None
+    if critique is None:
+        # The critique is the diagnostic a checklist judge exists for. A verdict list
+        # without one is not a usable judgment, so it stays unscored and out of the
+        # reuse cache instead of being recorded as a score with no reasoning.
+        return _unusable_response(None, "Rubric judge response has no critique")
     entries = payload.get("criteria")
     if not isinstance(entries, list):
         return _unusable_response(critique, "Rubric judge response has no criteria list")
@@ -223,6 +228,37 @@ def _response_verdicts(response_text: str) -> dict[str, Any]:
     }
 
 
+def _weighted_score(
+    rubric: RubricSpec, statuses: Mapping[str, str]
+) -> tuple[float, float, float | None]:
+    """Return the met weight, the denominator weight, and the clipped rollup.
+
+    Sharing one implementation keeps a scored response and the report derived from it in
+    agreement: the parser and the aggregator both read the score off the same verdicts.
+    """
+    weight_met = 0.0
+    weight_possible = 0.0
+    for criterion in rubric.criteria:
+        status = statuses[criterion.id]
+        if criterion.polarity == "positive" and status != UNKNOWN:
+            weight_possible += criterion.weight
+        if status == MET:
+            weight_met += (
+                criterion.weight if criterion.polarity == "positive" else -criterion.weight
+            )
+    score = min(max(weight_met / weight_possible, 0.0), 1.0) if weight_possible > 0 else None
+    return weight_met, weight_possible, score
+
+
+def _recorded_score(value: Any, index: int) -> float | None:
+    """Return the score a result recorded, rejecting a value that is not a number."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"Result {index} records a non-numeric score: {value!r}")
+    return float(value)
+
+
 def parse_rubric_response(
     response_text: str, spec: Mapping[str, Any] | RubricSpec
 ) -> dict[str, Any]:
@@ -240,18 +276,12 @@ def parse_rubric_response(
 
     criteria = []
     counts = {MET: 0, NOT_MET: 0, UNKNOWN: 0}
-    weight_met = 0.0
-    weight_possible = 0.0
+    statuses: dict[str, str] = {}
     for criterion in rubric.criteria:
         met = verdicts.get(criterion.id)
         status = UNKNOWN if met is None else (MET if met else NOT_MET)
         counts[status] += 1
-        if criterion.polarity == "positive" and status != UNKNOWN:
-            weight_possible += criterion.weight
-        if status == MET:
-            weight_met += (
-                criterion.weight if criterion.polarity == "positive" else -criterion.weight
-            )
+        statuses[criterion.id] = status
         criteria.append(
             {
                 "id": criterion.id,
@@ -260,12 +290,11 @@ def parse_rubric_response(
                 "polarity": criterion.polarity,
             }
         )
+    weight_met, weight_possible, score = _weighted_score(rubric, statuses)
     declared = {criterion.id for criterion in rubric.criteria}
     return {
         "rubric_id": rubric.rubric_id,
-        "score": (
-            min(max(weight_met / weight_possible, 0.0), 1.0) if weight_possible > 0 else None
-        ),
+        "score": score,
         "critique": parsed["critique"],
         "weight_met": weight_met,
         "weight_possible": weight_possible,
@@ -294,7 +323,10 @@ def aggregate_rubric_results(
     Every result must record the rubric it was scored against, because two rubrics can
     share criterion ids while weighting or inverting them differently, and must report
     every criterion exactly once, because a repeated or omitted criterion would count a
-    single response more than once or leave it out of the coverage it reports.
+    single response more than once or leave it out of the coverage it reports. The mean
+    is recomputed from the reported verdicts rather than taken on trust, and a result
+    whose recorded score contradicts them is rejected, so the reported mean can never
+    disagree with the criterion statistics beside it.
     """
     rubric = parse_rubric_spec(spec)
     tallies = {criterion.id: {MET: 0, NOT_MET: 0, UNKNOWN: 0} for criterion in rubric.criteria}
@@ -311,8 +343,7 @@ def aggregate_rubric_results(
             )
         if result.get("parse_error"):
             unparseable += 1
-        if result.get("score") is not None:
-            scores.append(float(result["score"]))
+        statuses: dict[str, str] = {}
         reported: set[str] = set()
         for item in result.get("criteria") or []:
             identifier = str(item.get("id"))
@@ -331,12 +362,28 @@ def aggregate_rubric_results(
             if status not in tally:
                 raise ValueError(f"Unsupported criterion status: {item.get('status')!r}")
             tally[status] += 1
+            statuses[identifier] = status
         omitted = [criterion.id for criterion in rubric.criteria if criterion.id not in reported]
         if omitted:
             raise ValueError(
                 f"Result {index} omits rubric criteria: {', '.join(omitted)}; "
                 "every criterion must be reported, as unknown, so coverage stays accurate"
             )
+        score = _recorded_score(result.get("score"), index)
+        derived = _weighted_score(rubric, statuses)[2]
+        contradicts = (score is None) != (derived is None) or (
+            score is not None
+            and derived is not None
+            and not math.isclose(score, derived, rel_tol=1e-9, abs_tol=1e-12)
+        )
+        if contradicts:
+            raise ValueError(
+                f"Result {index} records score {result.get('score')!r}, but its criterion "
+                f"verdicts weigh out to {derived!r} under rubric {rubric.rubric_id}; "
+                "the mean must not contradict the verdicts it summarizes"
+            )
+        if derived is not None:
+            scores.append(derived)
 
     criteria = []
     for criterion in rubric.criteria:

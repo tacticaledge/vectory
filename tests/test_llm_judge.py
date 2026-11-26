@@ -384,6 +384,39 @@ def test_scale_reply_without_a_score_is_not_reused():
     assert len(evaluator.client.calls) == 2
 
 
+def test_rubric_reply_without_a_critique_is_not_reused():
+    evaluator = make_usage_evaluator('{"criteria": [{"id": "states_window", "met": true}]}')
+    evaluator.decision_mode = "rubric"
+    evaluator.rubric = parse_rubric_spec(RUBRIC)
+    evaluator.result_cache = {}
+
+    first = evaluator.evaluate_single("Answer")
+    evaluator.evaluate_single("Answer")
+
+    assert first["score"] is None
+    assert first["reasoning"] is None
+    assert first["parse_error"] == "Rubric judge response has no critique"
+    # Nothing scored, nothing cached: the row is judged again instead of persisting.
+    assert evaluator.result_cache == {}
+    assert len(evaluator.client.calls) == 2
+
+
+def test_rubric_reply_with_a_critique_is_reused():
+    evaluator = make_usage_evaluator(
+        '{"critique": "Names the window but cites nothing.", "criteria": '
+        '[{"id": "states_window", "met": true}, {"id": "cites_policy", "met": false}]}'
+    )
+    evaluator.decision_mode = "rubric"
+    evaluator.rubric = parse_rubric_spec(RUBRIC)
+    evaluator.result_cache = {}
+
+    evaluator.evaluate_single("Answer")
+    second = evaluator.evaluate_single("Answer")
+
+    assert second["reused"] is True and second["score"] == pytest.approx(0.75)
+    assert len(evaluator.client.calls) == 1
+
+
 def test_reuse_cache_drops_oldest_verdicts_beyond_its_bound(monkeypatch):
     import components.evaluators.llm_judge as llm_judge
 
