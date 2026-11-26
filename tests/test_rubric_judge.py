@@ -186,16 +186,20 @@ def test_missing_and_unparseable_criteria_are_unknown_and_leave_the_denominator(
     assert result["unparsed_entries"] == 2
 
 
-def test_contradicted_and_unexpected_ids_are_reported_without_being_resolved():
+def test_repeated_and_unexpected_ids_are_reported_without_being_resolved():
+    # The contract is one verdict per id, so a repeat is unresolved even when the
+    # repeated verdicts agree: it is reported rather than scored on either reading.
     result = parse_rubric_response(
         json.dumps(
             {
-                "critique": "Contradicts itself.",
+                "critique": "Contradicts itself and names an item twice.",
                 "criteria": [
                     {"id": "states_window", "met": True},
                     {"id": "states_window", "met": False},
                     {"id": "cites_policy", "met": "yes"},
                     {"id": "cites_policy", "met": True},
+                    {"id": "next_step", "met": True},
+                    {"id": "invents_terms", "met": False},
                     {"id": "tone", "met": True},
                 ],
             }
@@ -205,9 +209,36 @@ def test_contradicted_and_unexpected_ids_are_reported_without_being_resolved():
 
     statuses = {item["id"]: item["status"] for item in result["criteria"]}
     assert statuses["states_window"] == "unknown"
-    assert statuses["cites_policy"] == "met"
-    assert result["conflicting_ids"] == ["states_window"]
+    assert statuses["cites_policy"] == "unknown"
+    assert result["repeated_ids"] == ["cites_policy", "states_window"]
     assert result["unexpected_ids"] == ["tone"]
+    # Only the next-step item was decided once, so it alone carries the score.
+    assert result["weight_possible"] == 1
+    assert result["score"] == pytest.approx(1.0)
+
+
+def test_an_id_repeated_with_the_same_verdict_stays_unknown_and_is_reported():
+    result = parse_rubric_response(
+        json.dumps(
+            {
+                "critique": "Decides the window item twice the same way.",
+                "criteria": [
+                    {"id": "states_window", "met": True},
+                    {"id": "states_window", "met": True},
+                    {"id": "cites_policy", "met": True},
+                    {"id": "next_step", "met": True},
+                    {"id": "invents_terms", "met": False},
+                ],
+            }
+        ),
+        RUBRIC,
+    )
+
+    statuses = {item["id"]: item["status"] for item in result["criteria"]}
+    assert statuses["states_window"] == "unknown"
+    assert result["repeated_ids"] == ["states_window"]
+    # The repeated item leaves the denominator instead of being scored on trust.
+    assert result["weight_possible"] == 3
     assert result["score"] == pytest.approx(1.0)
 
 

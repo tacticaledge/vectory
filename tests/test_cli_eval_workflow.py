@@ -1362,11 +1362,11 @@ def test_score_rubric_scores_record_malformed_response_diagnostics(tmp_path):
     ]
     # Both rows leave a criterion unknown; only the diagnostics say why.
     assert contradicted["criteria"]["states_window"] == "unknown"
-    assert contradicted["conflicting_ids"] == ["states_window"]
+    assert contradicted["repeated_ids"] == ["states_window"]
     assert contradicted["unexpected_ids"] == ["tone"]
     assert contradicted["unparsed_entries"] == 1
     assert skipped["criteria"]["next_step"] == "unknown"
-    assert skipped["conflicting_ids"] == []
+    assert skipped["repeated_ids"] == []
     assert skipped["unexpected_ids"] == []
     assert skipped["unparsed_entries"] == 0
 

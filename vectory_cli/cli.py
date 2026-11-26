@@ -811,8 +811,8 @@ def run_score_rubric(args: argparse.Namespace) -> int:
                     "criteria": {item["id"]: item["status"] for item in result["criteria"]},
                     "parse_error": result["parse_error"],
                     # Keep the malformed-response diagnostics, so an unknown criterion the
-                    # judge contradicted or garbled stays distinguishable from a skipped one.
-                    "conflicting_ids": result["conflicting_ids"],
+                    # judge repeated or garbled stays distinguishable from a skipped one.
+                    "repeated_ids": result["repeated_ids"],
                     "unexpected_ids": result["unexpected_ids"],
                     "unparsed_entries": result["unparsed_entries"],
                 }

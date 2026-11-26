@@ -23,8 +23,8 @@ from pydantic import (
 )
 
 
-# Per-criterion outcomes. "unknown" covers a criterion the judge skipped, contradicted,
-# or returned unparseably: it never counts as met and never reaches the score denominator.
+# Per-criterion outcomes. "unknown" covers a criterion the judge skipped, repeated, or
+# returned unparseably: it never counts as met and never reaches the score denominator.
 MET = "met"
 NOT_MET = "not_met"
 UNKNOWN = "unknown"
@@ -175,7 +175,7 @@ def _unusable_response(critique: str | None, reason: str | None) -> dict[str, An
     return {
         "critique": critique,
         "verdicts": {},
-        "conflicting_ids": [],
+        "repeated_ids": [],
         "unparsed_entries": 0,
         "parse_error": reason,
     }
@@ -184,8 +184,10 @@ def _unusable_response(critique: str | None, reason: str | None) -> dict[str, An
 def _response_verdicts(response_text: str) -> dict[str, Any]:
     """Collect the usable per-criterion verdicts from one recorded judge response.
 
-    An item repeated with contradictory verdicts is reported instead of resolved by
-    arbitrarily keeping one of them.
+    The contract is one verdict per listed id, so a repeated item is reported instead of
+    resolved whether or not its verdicts agree: agreeing repeats are still a response
+    that did not decide the checklist as asked, and resolving them would keep that out
+    of the diagnostics while contradictory repeats are reported.
     """
     try:
         payload = json.loads(response_text)
@@ -218,10 +220,10 @@ def _response_verdicts(response_text: str) -> dict[str, Any]:
         "verdicts": {
             identifier: verdicts[0]
             for identifier, verdicts in observed.items()
-            if len(set(verdicts)) == 1
+            if len(verdicts) == 1
         },
-        "conflicting_ids": sorted(
-            identifier for identifier, verdicts in observed.items() if len(set(verdicts)) > 1
+        "repeated_ids": sorted(
+            identifier for identifier, verdicts in observed.items() if len(verdicts) > 1
         ),
         "unparsed_entries": unparsed_entries,
         "parse_error": None,
@@ -266,9 +268,9 @@ def parse_rubric_response(
 
     The score is the clipped weighted fraction ``sum(w * met) / sum(w)`` over the
     positive criteria the judge resolved; a met negative criterion subtracts its weight
-    from the numerator. Criteria the judge skipped, contradicted, or returned
-    unparseably are reported as "unknown" and stay out of both sums, so an incomplete
-    response reduces coverage instead of silently passing or failing its items.
+    from the numerator. Criteria the judge skipped, repeated, or returned unparseably are
+    reported as "unknown" and stay out of both sums, so an incomplete response reduces
+    coverage instead of silently passing or failing its items.
     """
     rubric = parse_rubric_spec(spec)
     parsed = _response_verdicts(response_text)
@@ -300,10 +302,10 @@ def parse_rubric_response(
         "weight_possible": weight_possible,
         "criteria": criteria,
         "status_counts": counts,
-        "conflicting_ids": [
-            identifier for identifier in parsed["conflicting_ids"] if identifier in declared
+        "repeated_ids": [
+            identifier for identifier in parsed["repeated_ids"] if identifier in declared
         ],
-        "unexpected_ids": sorted((set(verdicts) | set(parsed["conflicting_ids"])) - declared),
+        "unexpected_ids": sorted((set(verdicts) | set(parsed["repeated_ids"])) - declared),
         "unparsed_entries": parsed["unparsed_entries"],
         "parse_error": parsed["parse_error"],
     }

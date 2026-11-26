@@ -51,7 +51,7 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
    `vectory score-rubric RESPONSES --rubric RUBRIC_JSON --out RUBRIC_REPORT --scores-out RUBRIC_SCORES`
 
-   Each criterion is one atomic yes/no item with an id, text, and numeric weight; add `"polarity": "negative"` for a penalty item. The score is the clipped weighted fraction over the criteria the judge resolved, and skipped, contradicted, or unparseable items are reported as `unknown` instead of counted as met. Report the criteria the dataset fails most often, which the report ranks for you, and use them to choose the next fix or the next failure mode to promote.
+   Each criterion is one atomic yes/no item with an id, text, and numeric weight; add `"polarity": "negative"` for a penalty item. The score is the clipped weighted fraction over the criteria the judge resolved, and skipped, repeated, or unparseable items are reported as `unknown` instead of counted as met. Report the criteria the dataset fails most often, which the report ranks for you, and use them to choose the next fix or the next failure mode to promote.
 
 9. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
 
