@@ -207,7 +207,7 @@ vectory score-rubric data/rubric/example_judge_responses.jsonl \
 
 The report ranks criteria by dataset-level failure rate, the share of the responses that resolved a criterion and failed it: not met for a positive criterion, met for a penalty, because a met penalty is the defect it names. Equal rates are ordered by weight, and a criterion no response resolved has no rate and ranks last with its `unknown` count. The report is derived only from the supplied responses and carries no timestamps, so re-running it over the same recorded outputs produces byte-identical JSON and a reviewable diff. `--scores-out` writes one row per response with its score and per-criterion status.
 
-In the library, `components.evaluators.rubric` exposes the spec validator, the prompt checklist renderer, the response parser, and the aggregator, and `LLMJudgeEvaluator(decision_mode="rubric", rubric=...)` runs the same prompt and parser against a provider.
+In the library, `components.evaluators.rubric` exposes the spec validator, the prompt checklist renderer, the response parser, and the aggregator, and `LLMJudgeEvaluator(decision_mode="rubric", rubric=...)` runs the same prompt and parser against a provider. Each scored response records the `rubric_id` it was judged against, and the aggregator rejects any result that names a different rubric, because two rubrics can reuse the same criterion ids while weighting or inverting them differently.
 
 Rubric scores are diagnostics, not release gates: they are weighted judge opinions, not human-validated decisions. Keep gating on a binary judge whose true-pass and true-fail rates were measured on held-out human labels, and use the criterion ranking to decide which requirement to fix or which failure mode to promote next.
 

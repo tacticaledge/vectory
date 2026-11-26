@@ -313,8 +313,51 @@ def test_aggregate_rejects_results_from_another_rubric():
     }
     results = [parse_rubric_response(recorded_response(tone=True), other)]
 
-    with pytest.raises(ValueError, match="not part of rubric refund-reply"):
+    with pytest.raises(ValueError, match="scored against rubric 'other-rubric'"):
         aggregate_rubric_results(RUBRIC, results)
+
+
+def test_aggregate_rejects_a_criterion_outside_the_rubric():
+    result = dict(dataset_results()[0])
+    result["criteria"] = [
+        *result["criteria"],
+        {"id": "tone", "status": "met", "weight": 1, "polarity": "positive"},
+    ]
+
+    with pytest.raises(ValueError, match="not part of rubric refund-reply"):
+        aggregate_rubric_results(RUBRIC, [result])
+
+
+def test_aggregate_rejects_same_shaped_results_from_another_rubric():
+    # Same criterion ids, different weights and an inverted penalty: not comparable.
+    restated = {
+        "rubric_id": "refund-reply-v2",
+        "criteria": [
+            {"id": "states_window", "text": "States the refund window.", "weight": 1},
+            {"id": "cites_policy", "text": "Cites the policy section.", "weight": 1},
+            {"id": "next_step", "text": "Gives the next concrete step.", "weight": 1},
+            {"id": "invents_terms", "text": "Invents a refund term.", "weight": 5},
+        ],
+    }
+    results = [
+        parse_rubric_response(
+            recorded_response(
+                states_window=True, cites_policy=False, next_step=True, invents_terms=True
+            ),
+            restated,
+        )
+    ]
+
+    with pytest.raises(ValueError, match="scored against rubric 'refund-reply-v2'"):
+        aggregate_rubric_results(RUBRIC, results)
+
+
+def test_aggregate_rejects_a_result_that_records_no_rubric():
+    result = dict(dataset_results()[0])
+    del result["rubric_id"]
+
+    with pytest.raises(ValueError, match="scored against rubric None"):
+        aggregate_rubric_results(RUBRIC, [result])
 
 
 if __name__ == "__main__":

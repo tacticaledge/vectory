@@ -290,13 +290,23 @@ def aggregate_rubric_results(
     over the responses that resolved the criterion, so unknown items lower coverage
     instead of the rate. The report is derived only from the supplied results and carries
     no timestamps, so two runs over the same recorded outputs are byte-identical.
+
+    Every result must record the rubric it was scored against, because two rubrics can
+    share criterion ids while weighting or inverting them differently.
     """
     rubric = parse_rubric_spec(spec)
     tallies = {criterion.id: {MET: 0, NOT_MET: 0, UNKNOWN: 0} for criterion in rubric.criteria}
     rows = list(results)
     scores = []
     unparseable = 0
-    for result in rows:
+    for index, result in enumerate(rows):
+        scored_against = result.get("rubric_id")
+        if scored_against != rubric.rubric_id:
+            raise ValueError(
+                f"Result {index} was scored against rubric {scored_against!r}, "
+                f"not {rubric.rubric_id!r}; shared criterion ids do not make two "
+                "rubrics comparable"
+            )
         if result.get("parse_error"):
             unparseable += 1
         if result.get("score") is not None:
