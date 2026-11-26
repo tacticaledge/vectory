@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0",
+  "rubric_id": "refund-reply",
+  "description": "Checklist for a support assistant answering a refund question.",
+  "criteria": [
+    {
+      "id": "states_window",
+      "text": "States the refund window that applies to the customer's order.",
+      "weight": 3
+    },
+    {
+      "id": "cites_policy",
+      "text": "Cites the policy section the answer relies on.",
+      "weight": 2
+    },
+    {
+      "id": "next_step",
+      "text": "Tells the customer the next concrete step to request the refund.",
+      "weight": 1
+    },
+    {
+      "id": "invents_terms",
+      "text": "Invents a refund term that the policy does not contain.",
+      "weight": 2,
+      "polarity": "negative"
+    }
+  ]
+}

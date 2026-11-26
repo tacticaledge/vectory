@@ -1247,6 +1247,104 @@ def test_validate_judge_enforces_stricter_evaluator_thresholds(tmp_path):
     assert updated_evaluator["status"] == "validation_failed"
 
 
+EXAMPLE_RUBRIC = Path(__file__).resolve().parents[1] / "data" / "rubric" / "example_rubric.json"
+EXAMPLE_RUBRIC_RESPONSES = EXAMPLE_RUBRIC.with_name("example_judge_responses.jsonl")
+
+
+def test_score_rubric_ranks_criteria_and_writes_per_response_scores(tmp_path, capsys):
+    report_path = tmp_path / "rubric-report.json"
+    scores_path = tmp_path / "rubric-scores.jsonl"
+
+    assert main(
+        [
+            "score-rubric",
+            str(EXAMPLE_RUBRIC_RESPONSES),
+            "--rubric",
+            str(EXAMPLE_RUBRIC),
+            "--out",
+            str(report_path),
+            "--scores-out",
+            str(scores_path),
+        ]
+    ) == 0
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    scores = [json.loads(line) for line in scores_path.read_text(encoding="utf-8").splitlines()]
+    assert report["rubric_id"] == "refund-reply"
+    assert [criterion["id"] for criterion in report["criteria"]] == [
+        "cites_policy",
+        "states_window",
+        "invents_terms",
+        "next_step",
+    ]
+    assert report["criteria"][0]["failure_rate"] == 0.75
+    assert report["scored_responses"] == 4
+    assert [row["id"] for row in scores] == ["reply-1", "reply-2", "reply-3", "reply-4"]
+    assert scores[0]["score"] == 1.0
+    assert scores[2]["score"] == 0.0
+    assert scores[3]["criteria"]["next_step"] == "unknown"
+    output = capsys.readouterr().out
+    assert "cites_policy: failure_rate=0.750, failed=3/4" in output
+    assert "Mean score: 0.567" in output
+
+
+def test_score_rubric_report_is_byte_identical_across_runs(tmp_path):
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+
+    for target in (first, second):
+        assert main(
+            [
+                "score-rubric",
+                str(EXAMPLE_RUBRIC_RESPONSES),
+                "--rubric",
+                str(EXAMPLE_RUBRIC),
+                "--out",
+                str(target),
+            ]
+        ) == 0
+
+    assert first.read_bytes() == second.read_bytes()
+
+
+def test_score_rubric_rejects_an_invalid_rubric(tmp_path, capsys):
+    rubric_path = tmp_path / "rubric.json"
+    rubric_path.write_text(
+        json.dumps(
+            {
+                "rubric_id": "refund-reply",
+                "criteria": [
+                    {"id": "states_window", "text": "States it.", "weight": 1},
+                    {"id": "states_window", "text": "States it again.", "weight": 2},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as error:
+        main(["score-rubric", str(EXAMPLE_RUBRIC_RESPONSES), "--rubric", str(rubric_path)])
+
+    assert error.value.code == 2
+    assert "ids must be unique" in capsys.readouterr().err
+
+
+def test_score_rubric_rejects_rows_without_a_recorded_response(tmp_path, capsys):
+    responses = tmp_path / "responses.jsonl"
+    write_jsonl(
+        responses,
+        [
+            {"id": "reply-1", "judge_response": '{"critique": "Fine.", "criteria": []}'},
+            {"id": "reply-2", "judge_response": ""},
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        main(["score-rubric", str(responses), "--rubric", str(EXAMPLE_RUBRIC)])
+
+    assert "is empty on 1 of 2 rows; the first is row 1" in capsys.readouterr().err
+
+
 if __name__ == "__main__":
     from tests.utils import pytest_this_file
 
