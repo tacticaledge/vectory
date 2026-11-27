@@ -38,6 +38,12 @@ from components.eval_workflow import (
     train_split_expert_examples,
     validate_evaluator_labels,
 )
+from components.evaluators.rubric import (
+    RubricReport,
+    aggregate_rubric_results,
+    parse_rubric_response,
+    parse_rubric_spec,
+)
 
 from . import __version__
 
@@ -765,6 +771,79 @@ def run_estimate(args: argparse.Namespace) -> int:
     return 0 if gate_passed else 1
 
 
+def _recorded_response(value: object) -> str:
+    """Return one recorded judge response as the JSON text the parser expects."""
+    if isinstance(value, str):
+        return value
+    # Loaders keep a nested JSON column as an object; serialize it back for parsing.
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def run_score_rubric(args: argparse.Namespace) -> int:
+    rubric = parse_rubric_spec(json.loads(args.rubric.read_text(encoding="utf-8")))
+    records = _load_records(args.responses)
+    missing = [
+        index
+        for index, record in enumerate(records)
+        if not str(record.get(args.response_column) or "").strip()
+    ]
+    if missing:
+        raise ValueError(
+            f"Recorded judge response column {args.response_column!r} is empty on "
+            f"{len(missing)} of {len(records)} rows; the first is row {missing[0]}"
+        )
+    results = [
+        parse_rubric_response(_recorded_response(record[args.response_column]), rubric)
+        for record in records
+    ]
+    report = RubricReport.model_validate(aggregate_rubric_results(rubric, results))
+    if args.out:
+        _write_json(args.out, report.model_dump(mode="json"))
+        print(f"Wrote rubric report: {args.out}")
+    if args.scores_out:
+        _write_jsonl(
+            args.scores_out,
+            [
+                {
+                    "index": index,
+                    "id": record.get(args.id_column),
+                    "rubric_id": result["rubric_id"],
+                    "rubric_fingerprint": result["rubric_fingerprint"],
+                    "score": result["score"],
+                    "criteria": {item["id"]: item["status"] for item in result["criteria"]},
+                    "parse_error": result["parse_error"],
+                    # Keep the malformed-response diagnostics, so an unknown criterion the
+                    # judge repeated or garbled stays distinguishable from a skipped one.
+                    "repeated_ids": result["repeated_ids"],
+                    "unexpected_ids": result["unexpected_ids"],
+                    "unparsed_entries": result["unparsed_entries"],
+                }
+                for index, (record, result) in enumerate(zip(records, results))
+            ],
+        )
+        print(f"Wrote per-response rubric scores: {args.scores_out}")
+    print(f"Rubric: {rubric.rubric_id} ({len(rubric.criteria)} criteria)")
+    print(f"Scored responses: {report.scored_responses} of {report.responses}")
+    print(
+        f"Mean score: {report.mean_score:.3f}"
+        if report.mean_score is not None
+        else "Mean score: n/a"
+    )
+    if report.unparseable_responses:
+        print(f"Unparseable responses: {report.unparseable_responses}")
+    print("Criteria ranked by failure rate:")
+    for criterion in report.criteria:
+        rate = (
+            f"{criterion.failure_rate:.3f}" if criterion.failure_rate is not None else "n/a"
+        )
+        print(
+            f"  {criterion.id}: failure_rate={rate}, failed={criterion.failures}/"
+            f"{criterion.evaluated}, weight={criterion.weight:g}, unknown={criterion.unknown}"
+        )
+    print("Rubric scores are diagnostics; validate a binary judge before gating releases.")
+    return 0
+
+
 def _available(module: str) -> bool:
     return importlib.util.find_spec(module) is not None
 
@@ -1057,6 +1136,34 @@ def build_parser() -> argparse.ArgumentParser:
     estimate_parser.add_argument("--seed", type=int, default=42)
     estimate_parser.add_argument("--out", type=Path, help="Optional JSON estimate report path.")
     estimate_parser.set_defaults(func=run_estimate)
+
+    rubric_parser = subparsers.add_parser(
+        "score-rubric",
+        help="Score recorded checklist judge responses and rank criteria by failure rate.",
+    )
+    rubric_parser.add_argument(
+        "responses",
+        type=Path,
+        help="JSON, JSONL, or CSV of recorded rubric judge responses.",
+    )
+    rubric_parser.add_argument(
+        "--rubric", type=Path, required=True, help="Rubric spec JSON with weighted criteria."
+    )
+    rubric_parser.add_argument(
+        "--response-column",
+        default="judge_response",
+        help="Column holding each recorded judge response. Default: judge_response.",
+    )
+    rubric_parser.add_argument(
+        "--id-column",
+        default="id",
+        help="Optional column naming each scored response. Default: id.",
+    )
+    rubric_parser.add_argument("--out", type=Path, help="Optional JSON rubric report path.")
+    rubric_parser.add_argument(
+        "--scores-out", type=Path, help="Optional JSONL path for per-response rubric scores."
+    )
+    rubric_parser.set_defaults(func=run_score_rubric)
 
     doctor_parser = subparsers.add_parser("doctor", help="Check local Vectory installation health.")
     doctor_parser.set_defaults(func=doctor)

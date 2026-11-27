@@ -16,6 +16,12 @@ MAX_REUSED_RESULTS = 5000
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .base import BaseEvaluator
+from .rubric import (
+    RubricJudgeResponse,
+    parse_rubric_response,
+    parse_rubric_spec,
+    render_rubric_checklist,
+)
 
 
 DEFAULT_EVALUATION_PROMPT = """You are an expert evaluator assessing the quality of an LLM response.
@@ -57,6 +63,30 @@ Return a JSON object with exactly two fields, for example:
 {{"critique": "detailed explanation", "result": "Pass"}}
 The result value must be exactly "Pass" or "Fail".
 Do not use a numeric scale."""
+
+
+RUBRIC_RESPONSE_INSTRUCTIONS = """## Instructions
+First write a specific critique grounded in the supplied input, response, reference, and context.
+Then decide each checklist item on its own: met or not met.
+Return a JSON object with exactly two fields, for example:
+{"critique": "detailed explanation", "criteria": [{"id": "item_id", "met": true}]}
+Decide every listed id exactly once and use no other id.
+Do not return an overall score; the weighted score is computed from your checklist."""
+
+
+RUBRIC_EVALUATION_PROMPT = """You are an expert evaluator checking one response against an explicit checklist.
+
+{context}
+
+## Response to Evaluate
+{output}
+
+{reference_section}
+
+## Checklist
+{criteria}
+
+{instructions}"""
 
 
 CRITERIA_TEMPLATES = {
@@ -110,6 +140,7 @@ class LLMJudgeEvaluator(BaseEvaluator):
         decision_mode: str = "binary",
         aws_region: str = None,
         result_cache: dict = None,
+        rubric: dict = None,
     ):
         self.provider = provider
         self.api_key = api_key
@@ -123,9 +154,13 @@ class LLMJudgeEvaluator(BaseEvaluator):
         self.custom_prompt = custom_prompt
         self.include_reference = include_reference
         self.rate_limit_delay = rate_limit_delay
-        if decision_mode not in {"binary", "scale_1_5"}:
-            raise ValueError("decision_mode must be binary or scale_1_5")
+        if decision_mode not in {"binary", "rubric", "scale_1_5"}:
+            raise ValueError("decision_mode must be binary, rubric, or scale_1_5")
         self.decision_mode = decision_mode
+        # Validated once here so a malformed checklist fails before any billed call.
+        self.rubric = parse_rubric_spec(rubric) if rubric is not None else None
+        if decision_mode == "rubric" and self.rubric is None:
+            raise ValueError("rubric decision_mode requires a rubric spec")
         self.client = self._init_client()
 
     def _default_model(self) -> str:
@@ -148,6 +183,14 @@ class LLMJudgeEvaluator(BaseEvaluator):
                 ("{input}", input_text or ""),
             ):
                 prompt = prompt.replace(placeholder, value)
+            if self.decision_mode == "rubric":
+                # A custom prompt replaces the framing, never the checklist: the parser
+                # only scores declared ids, so a prompt without them would return
+                # verdicts that all resolve to "unknown" and leave the row unscored.
+                prompt = (
+                    f"{prompt}\n\n## Checklist\n{render_rubric_checklist(self.rubric)}"
+                    f"\n\n{RUBRIC_RESPONSE_INSTRUCTIONS}"
+                )
             return prompt
 
         context = ""
@@ -158,16 +201,21 @@ class LLMJudgeEvaluator(BaseEvaluator):
         if reference and self.include_reference:
             reference_section = f"## Reference/Expected Response\n{reference}"
 
-        prompt_template = (
-            BINARY_EVALUATION_PROMPT
-            if self.decision_mode == "binary"
-            else DEFAULT_EVALUATION_PROMPT
-        )
+        prompt_template = {
+            "binary": BINARY_EVALUATION_PROMPT,
+            "rubric": RUBRIC_EVALUATION_PROMPT,
+            "scale_1_5": DEFAULT_EVALUATION_PROMPT,
+        }[self.decision_mode]
         return prompt_template.format(
             context=context,
             output=output,
             reference_section=reference_section,
-            criteria=self.criteria,
+            criteria=(
+                render_rubric_checklist(self.rubric)
+                if self.decision_mode == "rubric"
+                else self.criteria
+            ),
+            instructions=RUBRIC_RESPONSE_INSTRUCTIONS,
         )
 
     def _cache_prefix(self) -> str | None:
@@ -184,6 +232,16 @@ class LLMJudgeEvaluator(BaseEvaluator):
 
     def _parse_response(self, response_text: str) -> dict:
         """Parse the LLM response to extract score and reasoning."""
+        if self.decision_mode == "rubric":
+            # A checklist response is never rejected wholesale: items the judge skipped
+            # or garbled stay "unknown" and the resolved items still carry a score.
+            result = parse_rubric_response(response_text, self.rubric)
+            return {
+                **result,
+                "reasoning": result["critique"],
+                "raw_response": response_text,
+            }
+
         if self.decision_mode == "binary":
             try:
                 payload = BinaryJudgeResponse.model_validate_json(response_text)
@@ -226,7 +284,11 @@ class LLMJudgeEvaluator(BaseEvaluator):
         return result
 
     def _response_schema(self) -> dict | None:
-        return BinaryJudgeResponse.model_json_schema() if self.decision_mode == "binary" else None
+        contract = {
+            "binary": BinaryJudgeResponse,
+            "rubric": RubricJudgeResponse,
+        }.get(self.decision_mode)
+        return contract.model_json_schema() if contract is not None else None
 
     def _call_openai(self, prompt: str) -> Completion:
         return self.client.complete_with_usage(
@@ -248,6 +310,8 @@ class LLMJudgeEvaluator(BaseEvaluator):
 
     def _result_key(self, prompt: str) -> str:
         identity = [self.provider, self.model, self.decision_mode, prompt]
+        if self.decision_mode == "rubric":
+            identity.append(self.rubric.fingerprint())
         return hashlib.sha256(json.dumps(identity).encode("utf-8")).hexdigest()
 
     def _remember(self, key: str, result: dict) -> None:

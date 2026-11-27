@@ -14,16 +14,27 @@ from components.evaluators.llm_judge import (
     get_result_column,
     summarize_usage,
 )
+from components.evaluators.rubric import parse_rubric_spec
 from components.usage import TokenUsage
 
 
-def make_evaluator(decision_mode="binary"):
+RUBRIC = {
+    "rubric_id": "refund-reply",
+    "criteria": [
+        {"id": "states_window", "text": "States the refund window.", "weight": 3},
+        {"id": "cites_policy", "text": "Cites the policy section.", "weight": 1},
+    ],
+}
+
+
+def make_evaluator(decision_mode="binary", rubric=None):
     evaluator = LLMJudgeEvaluator.__new__(LLMJudgeEvaluator)
     evaluator.decision_mode = decision_mode
     evaluator.custom_prompt = None
     evaluator.criteria = "The response must answer the request without inventing facts."
     evaluator.include_reference = True
     evaluator.result_cache = None
+    evaluator.rubric = parse_rubric_spec(rubric) if rubric else None
     return evaluator
 
 
@@ -107,6 +118,71 @@ def test_scale_parser_ignores_numbered_list_markers():
 
     assert parsed["score"] == 5
     assert parsed["reasoning"] == "Correct and direct."
+
+
+def test_rubric_prompt_asks_for_a_critique_then_one_verdict_per_checklist_id():
+    evaluator = make_evaluator("rubric", RUBRIC)
+
+    prompt = evaluator._build_prompt("A response", "A reference", "A question")
+
+    assert "- states_window (weight 3): States the refund window." in prompt
+    assert "- cites_policy (weight 1): Cites the policy section." in prompt
+    assert prompt.index("critique") < prompt.index('"criteria"')
+    assert '{"critique": "detailed explanation", "criteria": [{"id": "item_id", "met": true}]}' in prompt
+    assert "Do not return an overall score" in prompt
+
+
+def test_rubric_judge_scores_a_recorded_checklist_response():
+    evaluator = make_evaluator("rubric", RUBRIC)
+
+    result = evaluator._parse_response(
+        '{"critique": "Names the window but cites nothing.", "criteria": '
+        '[{"id": "states_window", "met": true}, {"id": "cites_policy", "met": false}]}'
+    )
+
+    assert result["score"] == pytest.approx(0.75)
+    assert result["reasoning"] == "Names the window but cites nothing."
+    assert [item["status"] for item in result["criteria"]] == ["met", "not_met"]
+
+
+def test_rubric_judge_keeps_an_undecided_item_out_of_the_score():
+    evaluator = make_evaluator("rubric", RUBRIC)
+
+    result = evaluator._parse_response(
+        '{"critique": "Only the window was decided.", "criteria": '
+        '[{"id": "states_window", "met": true}]}'
+    )
+
+    assert result["score"] == 1.0
+    assert result["status_counts"] == {"met": 1, "not_met": 0, "unknown": 1}
+
+
+def test_rubric_judge_requests_the_per_criterion_response_schema():
+    evaluator = make_evaluator("rubric", RUBRIC)
+
+    schema = evaluator._response_schema()
+    item = schema["$defs"]["RubricCriterionVerdict"]
+
+    assert schema["additionalProperties"] is False
+    assert sorted(schema["required"]) == ["criteria", "critique"]
+    assert sorted(item["required"]) == ["id", "met"]
+
+
+def test_rubric_custom_prompt_still_carries_the_checklist_and_its_contract():
+    evaluator = make_evaluator("rubric", RUBRIC)
+    evaluator.custom_prompt = "Judge this refund reply.\nInput: {input}\nResponse: {output}"
+
+    prompt = evaluator._build_prompt("A response", input_text="A question")
+
+    assert prompt.startswith("Judge this refund reply.\nInput: A question\nResponse: A response")
+    assert "- states_window (weight 3): States the refund window." in prompt
+    assert "- cites_policy (weight 1): Cites the policy section." in prompt
+    assert "Decide every listed id exactly once and use no other id." in prompt
+
+
+def test_rubric_decision_mode_requires_a_rubric_spec():
+    with pytest.raises(ValueError, match="rubric decision_mode requires a rubric spec"):
+        LLMJudgeEvaluator(provider="openai", api_key="not-used", decision_mode="rubric")
 
 
 def test_custom_prompt_preserves_json_examples_while_replacing_known_placeholders():
@@ -319,6 +395,39 @@ def test_scale_reply_without_a_score_is_not_reused():
     assert first["score"] is None
     assert evaluator.result_cache == {}
     assert len(evaluator.client.calls) == 2
+
+
+def test_rubric_reply_without_a_critique_is_not_reused():
+    evaluator = make_usage_evaluator('{"criteria": [{"id": "states_window", "met": true}]}')
+    evaluator.decision_mode = "rubric"
+    evaluator.rubric = parse_rubric_spec(RUBRIC)
+    evaluator.result_cache = {}
+
+    first = evaluator.evaluate_single("Answer")
+    evaluator.evaluate_single("Answer")
+
+    assert first["score"] is None
+    assert first["reasoning"] is None
+    assert first["parse_error"] == "Rubric judge response has no critique"
+    # Nothing scored, nothing cached: the row is judged again instead of persisting.
+    assert evaluator.result_cache == {}
+    assert len(evaluator.client.calls) == 2
+
+
+def test_rubric_reply_with_a_critique_is_reused():
+    evaluator = make_usage_evaluator(
+        '{"critique": "Names the window but cites nothing.", "criteria": '
+        '[{"id": "states_window", "met": true}, {"id": "cites_policy", "met": false}]}'
+    )
+    evaluator.decision_mode = "rubric"
+    evaluator.rubric = parse_rubric_spec(RUBRIC)
+    evaluator.result_cache = {}
+
+    evaluator.evaluate_single("Answer")
+    second = evaluator.evaluate_single("Answer")
+
+    assert second["reused"] is True and second["score"] == pytest.approx(0.75)
+    assert len(evaluator.client.calls) == 1
 
 
 def test_reuse_cache_drops_oldest_verdicts_beyond_its_bound(monkeypatch):

@@ -47,9 +47,15 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 
    Report the corrected rate with its 95% interval, not the raw judge pass rate. To gate on the interval's lower bound, add `--min-pass-rate` together with `--evaluator EVALUATOR_JSON`; only a validated evaluator can gate, and every judged row must name that evaluator in its `evaluator_id` field.
 
-8. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
+8. If one Pass/Fail verdict cannot say which requirement broke, decompose the requirement into a weighted checklist and score recorded judge responses:
 
-9. When reliability under repetition matters, submit several runs per `task_id` to `vectory benchmark`. The leaderboard and report bundle then add unbiased `pass@k` and `pass^k`; quote `pass^k`, success on every one of `k` tries, for production readiness, and say which `k` and how many repeated tasks it covers.
+   `vectory score-rubric RESPONSES --rubric RUBRIC_JSON --out RUBRIC_REPORT --scores-out RUBRIC_SCORES`
+
+   Each criterion is one atomic yes/no item with an id, text, and numeric weight; add `"polarity": "negative"` for a penalty item. The score is the clipped weighted fraction over the criteria the judge resolved, and skipped, repeated, or unparseable items are reported as `unknown` instead of counted as met. Report the criteria the dataset fails most often, which the report ranks for you, and use them to choose the next fix or the next failure mode to promote.
+
+9. For agent reliability and proof-grounded release checks, also run `vectory gate` on Vectory Benchmark traces.
+
+10. When reliability under repetition matters, submit several runs per `task_id` to `vectory benchmark`. The leaderboard and report bundle then add unbiased `pass@k` and `pass^k`; quote `pass^k`, success on every one of `k` tries, for production readiness, and say which `k` and how many repeated tasks it covers.
 
 ## Preserve these invariants
 
@@ -59,6 +65,7 @@ Use Vectory's deterministic CLI and inspectable JSON artifacts. Start by inspect
 - Use expert critiques as judge examples; they must be specific enough for a new teammate to understand the verdict.
 - Draw judge examples from the train split only, and never from dev or test records.
 - Require both true-pass rate and true-fail rate. Inspect per-class precision and recall, not raw agreement alone.
+- Treat rubric criterion scores as diagnostics. Gate releases on a binary judge validated against held-out human labels.
 - Do not claim review, validation, or production readiness that did not happen.
 - Re-run expert alignment after material model, prompt, tool, or policy changes.
 - Keep sensitive traces local unless the user explicitly authorizes an external model or service.

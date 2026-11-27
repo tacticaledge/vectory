@@ -172,6 +172,45 @@ The report includes the observed rate, the corrected rate, and a 95% bootstrap i
 
 Use a random sample of outputs for the estimate. Coverage-biased discovery samples do not represent production prevalence.
 
+## Score a checklist rubric
+
+A single Pass/Fail verdict says that a response was unacceptable, not which requirement it missed. When one failure mode covers several independent requirements, decompose it into a checklist of atomic yes/no criteria and score each one separately, as [HealthBench](https://openai.com/index/healthbench/) does with physician-written rubrics and as [checklist feedback](https://arxiv.org/abs/2410.03608) does for instruction following.
+
+A rubric spec is a small JSON artifact:
+
+```json
+{
+  "schema_version": "1.0",
+  "rubric_id": "refund-reply",
+  "criteria": [
+    {"id": "states_window", "text": "States the refund window that applies.", "weight": 3},
+    {"id": "cites_policy", "text": "Cites the policy section the answer relies on.", "weight": 2},
+    {"id": "next_step", "text": "Tells the customer the next concrete step.", "weight": 1},
+    {"id": "invents_terms", "text": "Invents a refund term.", "weight": 2, "polarity": "negative"}
+  ]
+}
+```
+
+The spec is validated before any judge call: ids must be unique, every weight must be a plain finite number rather than a string or boolean, and at least one positive criterion must carry a weight above zero, because an all-zero weight set leaves the score with no denominator. A criterion with `"polarity": "negative"` is a penalty: meeting it subtracts its weight from the numerator and it never joins the denominator.
+
+The judge returns a critique first and then one verdict per id. Vectory computes the rollup deterministically as the clipped weighted fraction `sum(w * met) / sum(w)` over the positive criteria the judge resolved. Criteria the judge skipped, decided more than once, or returned unparseably are reported as `unknown`: they stay out of both sums instead of counting as met, so an incomplete response lowers coverage rather than the score. A verdict counts only when the judge decided its id exactly once, as the prompt asks; a repeated id is reported and left `unknown` whether or not the repeats agree, because a response that decided one item twice did not follow the checklist and should stay visible in the diagnostics. A response that is not usable JSON at all, or that returns verdicts without the required critique, leaves every criterion `unknown` and is reported as unscored, because a score with no reasoning behind it is not a reviewable diagnostic.
+
+Score recorded judge responses from the CLI:
+
+```bash
+vectory score-rubric data/rubric/example_judge_responses.jsonl \
+  --rubric data/rubric/example_rubric.json \
+  --response-column judge_response \
+  --out rubric-report.json \
+  --scores-out rubric-scores.jsonl
+```
+
+The report ranks criteria by dataset-level failure rate, the share of the responses that resolved a criterion and failed it: not met for a positive criterion, met for a penalty, because a met penalty is the defect it names. Equal rates are ordered by weight, and a criterion no response resolved has no rate and ranks last with its `unknown` count. The report is derived only from the supplied responses and carries no timestamps, so re-running it over the same recorded outputs produces byte-identical JSON and a reviewable diff. `--scores-out` writes one row per response with its score, its per-criterion status, and the diagnostics behind an `unknown`: the repeated ids, the ids the judge invented, the number of entries that could not be read, and any parse error. They tell a repeated or garbled criterion apart from one the judge simply skipped.
+
+In the library, `components.evaluators.rubric` exposes the spec validator, the prompt checklist renderer, the response parser, and the aggregator, and `LLMJudgeEvaluator(decision_mode="rubric", rubric=...)` runs the same prompt and parser against a provider. A `custom_prompt` replaces the framing of that prompt, not its checklist: the rendered criteria and the response contract are always appended, because the parser scores only the ids the rubric declares and a prompt without them would leave every criterion `unknown`. Each scored response, report and score export carries a SHA-256 fingerprint of the complete validated rubric definition alongside its `rubric_id`. Aggregation requires both values to match; older results without a fingerprint must be re-evaluated, and a changed definition cannot reuse the old result-cache key. It also rejects a result that repeats or omits a criterion: the parser always reports every criterion, as `unknown` when the judge left it unresolved, so a repeated or missing one would count a response twice or drop it out of the coverage the report states. The reported `mean_score` is recomputed from the per-criterion verdicts in the results rather than taken on trust, and a result whose recorded score contradicts its own verdicts is rejected, so the mean can never disagree with the criterion statistics printed beside it.
+
+Rubric scores are diagnostics, not release gates: they are weighted judge opinions, not human-validated decisions. Keep gating on a binary judge whose true-pass and true-fail rates were measured on held-out human labels, and use the criterion ranking to decide which requirement to fix or which failure mode to promote next.
+
 ## Use with Vectory Benchmark
 
 The human-grounded workflow captures product-specific expectations. Vectory Benchmark supplies complementary deterministic and proof-grounded agent checks:

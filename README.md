@@ -9,7 +9,7 @@
 ## Features
 
 - **📊 Dataset Management** - Upload JSON, CSV, or PDF files. Automatic column detection and mapping.
-- **🤖 LLM-as-Judge** - Run critique-first binary judges by default, import promoted failure-mode evaluators, and retain exploratory 1–5 scoring for compatibility. Each run records per-row token usage and list-price cost, including cache reads and reasoning tokens.
+- **🤖 LLM-as-Judge** - Run critique-first binary judges by default, score weighted checklist rubrics per criterion, import promoted failure-mode evaluators, and retain exploratory 1–5 scoring for compatibility. Each run records per-row token usage and list-price cost, including cache reads and reasoning tokens.
 - **📏 Rule-Based Metrics** - Calculate BLEU, ROUGE, exact match, Levenshtein similarity, and regex patterns.
 - **🔍 Error Analysis** - Review diverse trace samples, capture expert Pass/Fail critiques, discover failure modes, find related examples, and promote focused evaluators.
 - **🔎 RAG Metrics** - Evaluate retrieval precision, recall, MRR, NDCG, context relevance, faithfulness, and answer completeness.
@@ -80,6 +80,17 @@ vectory estimate production-judged.jsonl \
 ```
 
 When gating, every judged row must carry an `evaluator_id` field naming the evaluator that produced its label, so a validated evaluator's accuracy is never applied to another judge's labels. Use `--dataset-evaluator-column` if your field has a different name.
+
+When one Pass/Fail verdict hides which requirement broke, score a weighted checklist instead and rank the criteria that fail most often:
+
+```bash
+vectory score-rubric data/rubric/example_judge_responses.jsonl \
+  --rubric data/rubric/example_rubric.json \
+  --out rubric-report.json \
+  --scores-out rubric-scores.jsonl
+```
+
+Each criterion is one atomic yes/no item with a weight, and the score is the clipped weighted fraction of the criteria the judge resolved. Items the judge skipped or garbled are reported as `unknown` and stay out of the denominator instead of counting as met.
 
 See the [human-grounded evaluation workflow](docs/evaluation_workflow.md) for the app flow, artifact schema, validation metrics, and CI behavior.
 
@@ -226,6 +237,7 @@ Choose your evaluation method:
 
 #### LLM-as-Judge (🤖)
 - Start with a critique-first binary Pass/Fail decision
+- Decompose a broad requirement into a weighted checklist rubric and score it per criterion
 - Load a focused evaluator promoted from observed failure modes
 - Select OpenAI, Anthropic, or Claude on Amazon Bedrock and run batch predictions
 - Validate predictions against held-out domain-expert labels before release gating
@@ -442,6 +454,7 @@ vectory/
 │   ├── mteb_evaluator.py    # Embedding evaluation
 │   └── evaluators/          # Evaluation implementations
 │       ├── llm_judge.py
+│       ├── rubric.py        # Checklist rubric scoring
 │       ├── rag_metrics.py
 │       └── metrics.py
 ├── tests/                    # Test suite
