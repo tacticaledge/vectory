@@ -310,6 +310,8 @@ class LLMJudgeEvaluator(BaseEvaluator):
 
     def _result_key(self, prompt: str) -> str:
         identity = [self.provider, self.model, self.decision_mode, prompt]
+        if self.decision_mode == "rubric":
+            identity.append(self.rubric.fingerprint())
         return hashlib.sha256(json.dumps(identity).encode("utf-8")).hexdigest()
 
     def _remember(self, key: str, result: dict) -> None:

@@ -476,6 +476,20 @@ def test_aggregate_rejects_a_result_that_records_no_rubric():
         aggregate_rubric_results(RUBRIC, [result])
 
 
+@pytest.mark.parametrize(
+    "field,value", [("weight", 4), ("text", "Changed"), ("polarity", "negative"), ("missing", None)]
+)
+def test_aggregate_requires_the_exact_recorded_definition(field, value):
+    spec = parse_rubric_spec(RUBRIC).model_dump(mode="json")
+    result = dataset_results()[0]
+    if field == "missing":
+        result.pop("rubric_fingerprint")
+    else:
+        spec["criteria"][0][field] = value
+    with pytest.raises(ValueError, match="fingerprint"):
+        aggregate_rubric_results(spec, [result])
+
+
 if __name__ == "__main__":
     from tests.utils import pytest_this_file
 

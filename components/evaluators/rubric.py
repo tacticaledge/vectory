@@ -7,6 +7,7 @@ resolved, so the diagnostics stay per criterion and the score stays reproducible
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections import Counter
@@ -68,13 +69,8 @@ class RubricSpec(StrictModel):
 
     @model_validator(mode="after")
     def criteria_can_produce_a_score(self) -> RubricSpec:
-        repeated = sorted(
-            identifier
-            for identifier, count in Counter(
-                criterion.id for criterion in self.criteria
-            ).items()
-            if count > 1
-        )
+        counts = Counter(criterion.id for criterion in self.criteria)
+        repeated = sorted(identifier for identifier, count in counts.items() if count > 1)
         if repeated:
             raise ValueError(
                 f"Rubric criterion ids must be unique; repeated: {', '.join(repeated)}"
@@ -91,6 +87,12 @@ class RubricSpec(StrictModel):
         return sum(
             criterion.weight for criterion in self.criteria if criterion.polarity == "positive"
         )
+
+    def fingerprint(self) -> str:
+        """Identify the complete definition independently of its human-readable ID."""
+        return hashlib.sha256(
+            json.dumps(self.model_dump(mode="json"), sort_keys=True).encode("utf-8")
+        ).hexdigest()
 
 
 class RubricCriterionVerdict(StrictModel):
@@ -125,6 +127,7 @@ class RubricCriterionReport(StrictModel):
 
 class RubricReport(StrictModel):
     schema_version: Literal["1.0"]
+    rubric_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
     rubric_id: str
     responses: int = Field(ge=0)
     scored_responses: int = Field(ge=0)
@@ -296,6 +299,7 @@ def parse_rubric_response(
     declared = {criterion.id for criterion in rubric.criteria}
     return {
         "rubric_id": rubric.rubric_id,
+        "rubric_fingerprint": rubric.fingerprint(),
         "score": score,
         "critique": parsed["critique"],
         "weight_met": weight_met,
@@ -331,6 +335,7 @@ def aggregate_rubric_results(
     disagree with the criterion statistics beside it.
     """
     rubric = parse_rubric_spec(spec)
+    fingerprint = rubric.fingerprint()
     tallies = {criterion.id: {MET: 0, NOT_MET: 0, UNKNOWN: 0} for criterion in rubric.criteria}
     rows = list(results)
     scores = []
@@ -343,6 +348,8 @@ def aggregate_rubric_results(
                 f"not {rubric.rubric_id!r}; shared criterion ids do not make two "
                 "rubrics comparable"
             )
+        if result.get("rubric_fingerprint") != fingerprint:
+            raise ValueError(f"Result {index} has a different rubric fingerprint; re-evaluate it")
         if result.get("parse_error"):
             unparseable += 1
         statuses: dict[str, str] = {}
@@ -420,6 +427,7 @@ def aggregate_rubric_results(
     return {
         "schema_version": "1.0",
         "rubric_id": rubric.rubric_id,
+        "rubric_fingerprint": fingerprint,
         "responses": len(rows),
         "scored_responses": len(scores),
         "unscored_responses": len(rows) - len(scores),

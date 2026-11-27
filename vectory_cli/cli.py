@@ -807,6 +807,8 @@ def run_score_rubric(args: argparse.Namespace) -> int:
                 {
                     "index": index,
                     "id": record.get(args.id_column),
+                    "rubric_id": result["rubric_id"],
+                    "rubric_fingerprint": result["rubric_fingerprint"],
                     "score": result["score"],
                     "criteria": {item["id"]: item["status"] for item in result["criteria"]},
                     "parse_error": result["parse_error"],
